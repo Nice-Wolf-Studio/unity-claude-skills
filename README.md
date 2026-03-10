@@ -2,7 +2,7 @@
 
 A comprehensive Claude Code plugin providing **35 skills** covering the entire Unity Game Engine documentation. Based on **Unity 6.3 LTS** (6000.3) official documentation.
 
-> **95 files | 37,900+ lines** of actionable Unity development guidance, patterns, and API references.
+> **95 files | 44,500+ lines** of actionable Unity development guidance, patterns, and API references.
 
 ## Installation
 
@@ -94,11 +94,11 @@ These skills use a **DESIGN INTENT format** (DESIGN INTENT/WRONG/RIGHT/SCAFFOLD/
 
 | Skill | Scope | Files | Lines |
 |-------|-------|-------|-------|
-| `unity-game-loop` | Core loop scaffolding, session lifecycle, win/lose conditions, meta loops, difficulty, pacing | 2 | ~800 |
-| `unity-npc-behavior` | Perception systems, decision layers, action pipelines, factions, NPC memory, squad coordination | 2 | ~850 |
-| `unity-ui-patterns` | Screen flows, View/ViewModel, HUD architecture, feedback/juice, dynamic lists, transitions | 2 | ~800 |
-| `unity-level-design` | Triggers, encounters, checkpoints, cinematics, interactables, level streaming | 2 | ~830 |
-| `unity-procedural-gen` | Noise generation, tile/grid systems, dungeon generation, seeds, content budgets, baked vs runtime | 2 | ~850 |
+| `unity-game-loop` | Core loop scaffolding, session lifecycle, win/lose conditions, meta loops, difficulty, pacing | 2 | ~2,190 |
+| `unity-npc-behavior` | Perception systems, decision layers, action pipelines, factions, NPC memory, squad coordination | 2 | ~2,970 |
+| `unity-ui-patterns` | Screen flows, View/ViewModel, HUD architecture, feedback/juice, dynamic lists, transitions | 2 | ~1,880 |
+| `unity-level-design` | Triggers, encounters, checkpoints, cinematics, interactables, level streaming | 2 | ~2,150 |
+| `unity-procedural-gen` | Noise generation, tile/grid systems, dungeon generation, seeds, content budgets, baked vs runtime | 2 | ~1,955 |
 
 ## What Each Skill Provides
 
