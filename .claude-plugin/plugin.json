@@ -1,7 +1,7 @@
 {
   "name": "unity",
-  "description": "Comprehensive Unity 6 game engine development skills. 20 skills covering scripting, physics, graphics, animation, UI, audio, 2D, ECS/DOTS, Cinemachine, performance profiling, multiplayer, XR, editor tools, and more. Based on Unity 6.3 LTS official documentation.",
-  "version": "1.1.0",
+  "description": "Comprehensive Unity 6 game engine development skills. 35 skills covering scripting, physics, graphics, animation, UI, audio, 2D, ECS/DOTS, Cinemachine, performance profiling, multiplayer, XR, editor tools, 5 Tier 1 correctness skills, 5 Tier 2 architecture skills, and 5 Tier 3 domain translation skills (game loop, NPC behavior, UI patterns, level design, procedural generation). Based on Unity 6.3 LTS official documentation.",
+  "version": "1.4.0",
   "author": {
     "name": "Nice Wolf Studio"
   },
