@@ -1,8 +1,8 @@
 # Unity Claude Skills Plugin
 
-A comprehensive Claude Code plugin providing **20 skills** covering the entire Unity Game Engine documentation. Based on **Unity 6.3 LTS** (6000.3) official documentation.
+A comprehensive Claude Code plugin providing **35 skills** covering the entire Unity Game Engine documentation. Based on **Unity 6.3 LTS** (6000.3) official documentation.
 
-> **65 files | 26,000+ lines** of actionable Unity development guidance, patterns, and API references.
+> **95 files | 37,900+ lines** of actionable Unity development guidance, patterns, and API references.
 
 ## Installation
 
@@ -64,6 +64,42 @@ All skills **auto-invoke** when Claude detects relevant Unity work. You can also
 | `unity-testing` | Unity Test Framework, Edit/Play Mode tests, CI/CD | 2 | 1,096 |
 | `unity-packages-services` | Package Manager, Unity Gaming Services, 133 packages list | 2 | 709 |
 
+### Correctness Skills (Tier 1)
+
+These skills use a **PATTERN format** (WHEN/WRONG/RIGHT/GOTCHA) to catch Claude's most common mistakes -- wrong code that compiles and looks correct.
+
+| Skill | Scope | Files | Lines |
+|-------|-------|-------|-------|
+| `unity-3d-math` | Coordinate spaces, quaternions, Plane/Bounds, Camera projection, float precision | 2 | ~700 |
+| `unity-physics-queries` | Query type selection, NonAlloc, hit ordering, layer masks, trigger interaction | 2 | ~600 |
+| `unity-lifecycle` | Fake-null, Destroy deferral, editor vs runtime init, execution order, async destruction | 2 | ~600 |
+| `unity-input-correctness` | Action reading, rebinding persistence, multiplayer devices, control schemes | 2 | ~550 |
+| `unity-async-patterns` | Awaitable double-await, cancellation tokens, coroutine errors, Addressables | 2 | ~600 |
+
+### Architecture Skills (Tier 2)
+
+These skills use a **DECISION format** (WHEN/DECISION→Options/SCAFFOLD/GOTCHA) for architecture choices with genuine tradeoffs -- not one right answer, but the right answer for your context.
+
+| Skill | Scope | Files | Lines |
+|-------|-------|-------|-------|
+| `unity-game-architecture` | Service Locator vs DI, MonoBehaviour vs plain C#, event architecture, bootstrap | 2 | ~800 |
+| `unity-state-machines` | FSM, HFSM, Behavior Trees, stack machines, enum vs IState, testing | 2 | ~850 |
+| `unity-data-driven` | SO vs JSON config, data pipelines, designer handoff, versioning/migration | 2 | ~750 |
+| `unity-save-system` | Serialization formats, save architecture, PlayerPrefs, versioning, auto-save | 2 | ~850 |
+| `unity-scene-assets` | Additive scenes, Addressables, AssetReference, loading screens, asset lifecycle | 2 | ~750 |
+
+### Domain Translation Skills (Tier 3)
+
+These skills use a **DESIGN INTENT format** (DESIGN INTENT/WRONG/RIGHT/SCAFFOLD/DESIGN HOOK) bridging designer vision to code architecture -- translating what the game SHOULD feel like into how it SHOULD be built.
+
+| Skill | Scope | Files | Lines |
+|-------|-------|-------|-------|
+| `unity-game-loop` | Core loop scaffolding, session lifecycle, win/lose conditions, meta loops, difficulty, pacing | 2 | ~800 |
+| `unity-npc-behavior` | Perception systems, decision layers, action pipelines, factions, NPC memory, squad coordination | 2 | ~850 |
+| `unity-ui-patterns` | Screen flows, View/ViewModel, HUD architecture, feedback/juice, dynamic lists, transitions | 2 | ~800 |
+| `unity-level-design` | Triggers, encounters, checkpoints, cinematics, interactables, level streaming | 2 | ~830 |
+| `unity-procedural-gen` | Noise generation, tile/grid systems, dungeon generation, seeds, content budgets, baked vs runtime | 2 | ~850 |
+
 ## What Each Skill Provides
 
 Every skill includes:
@@ -88,7 +124,7 @@ unity-claude-skills/
 │   ├── unity-scripting/
 │   │   ├── SKILL.md
 │   │   └── references/
-│   ... (20 skills total)
+│   ... (35 skills total)
 └── README.md
 ```
 
