@@ -1,3 +1,14 @@
+## Errata — superseded by DESIGN.md revision 4 (2026-09-14)
+
+R5 is a research input, not a contract this design inherits unchanged. **Four** of its statements are corrected below — three superseded, one cosmetic and **`research/R5-hook-contract.md` carries this block verbatim at its head** so nobody reads the recommendation without the correction:
+
+| R5 says | Status | Superseded by |
+|---|---|---|
+| Recommends an `UNITY_OPS_SCENARIO` environment variable for scenario tagging | **WITHDRAWN** — no delivery mechanism (the Agent tool takes no env parameter; an `export` does not survive to the next Bash call; the hook process is spawned by the harness) | the flag file + lock + `session_id` capture above (R2-2, R3-7) |
+| Ships a guard skeleton that walks up from `$PWD` | **SUPERSEDED** — `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` makes it exit 0 on every call this plan makes | PLAN Task 1.2's script (stdin `cwd` / `dirname(file_path)` / `unity`-fronted segment) |
+| Rows 12 (`additionalContext` reaches the model) and 18 (hooks fire in subagents) | **CITED TO THE DOCS, NEVER EXERCISED HERE.** Both are load-bearing: row 18 carries the scenario tagging *and* the R3-1 trigger signal; row 12 carries every "advisory in v1" claim in §3 | PLAN Task 1.3 Part B observes both, with a per-run nonce for row 12 and a `session_id != parent` assertion for row 18, and falls back to §10 alternative C if either fails |
+| Rows 12 and 18 cite bare URLs | cosmetic; re-cite with the section name when R5 is next touched | — |
+
 # R5 — Claude Code PreToolUse hook contract (verified 2026-09-14)
 
 Purpose: the enforcement mechanism for `unity-ops` guardrails. v1 ships one fail-open PreToolUse hook in **shadow mode** (log + optional `additionalContext` warning, always allow); promotion of a pattern to a hard gate = flipping that pattern's decision to `deny`. Verified by the claude-code-guide agent against the official docs; citations inline. One correction by the orchestrator: on this machine the Write/Edit tools carry `file_path` (see the tool schemas in this session), the docs page cited says `path` — the hook must read `.tool_input.file_path // .tool_input.path`.
