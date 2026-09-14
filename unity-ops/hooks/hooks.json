@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test -f \"${CLAUDE_PLUGIN_ROOT}/hooks/unity-ops-guard\" && bash \"${CLAUDE_PLUGIN_ROOT}/hooks/unity-ops-guard\" || true",
+            "async": false
+          }
+        ]
+      }
+    ]
+  }
+}
