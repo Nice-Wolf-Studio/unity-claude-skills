@@ -65,7 +65,24 @@ rm -f "${T%.json}.session"      # never leave a previous run's id beside a new t
 
 # --- 4. Dispatch, IN THE BACKGROUND, then block in `wait`. Explicit permission envelope so a
 #        denied probe cannot read as RED.  [R3-4] [R4-F3] ---
-ALLOW="${UNITY_OPS_ALLOW:-Read Grep Glob Write Edit Skill Agent Bash(. *) Bash(export *) Bash(grep *) Bash(unity --version) Bash(unity --help) Bash(unity * --help) Bash(unity skill install --list) Bash(unity status*) Bash(unity list*) Bash(unity command*) Bash(unity pipeline list*) Bash(unity test*) Bash(unity build*) Bash(git status*) Bash(git diff*)}"
+# The rules contain SPACES and GLOB characters — `Bash(unity status*)` is ONE rule — so they must
+# be an ARRAY. As an unquoted string they were word-split into fragments AND pathname-expanded
+# against the dispatch cwd (~/Dev/Unity/ai_test), producing 48 junk tokens including that project's
+# own directory names and leaving NO `Bash(...)` rule intact — so every `unity` probe came back
+# DENIED and a denied probe reads as RED, which is the exact failure [R3-4] this envelope exists to
+# prevent. An override in UNITY_OPS_ALLOW is therefore NEWLINE-separated, one rule per line.  [T1.3]
+if [ -n "${UNITY_OPS_ALLOW:-}" ]; then
+  ALLOW=(); while IFS= read -r _r; do [ -n "$_r" ] && ALLOW+=("$_r"); done <<< "$UNITY_OPS_ALLOW"
+else
+  # `Task` is this CLI's subagent tool (2.1.270 lists it in the init envelope, not `Agent`);
+  # both are named so the envelope permits a subagent dispatch whichever the build exposes.  [T1.3]
+  ALLOW=(Read Grep Glob Write Edit Skill Agent Task \
+         "Bash(. *)" "Bash(export *)" "Bash(grep *)" \
+         "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
+         "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
+         "Bash(unity command*)" "Bash(unity pipeline list*)" "Bash(unity test*)" \
+         "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)")
+fi
 FMT="${UNITY_OPS_FORMAT:-json}"
 if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
   ( exec sleep "${UNITY_OPS_DRYSLEEP:-2}" ) & child=$!
@@ -75,8 +92,8 @@ else
   ( cd ~/Dev/Unity/ai_test && \
     UNITY_TEST_TIMEOUT=600 UNITY_BUILD_TIMEOUT=1800 UNITY_RUN_TIMEOUT=600 \
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
-      --permission-mode dontAsk --allowedTools $ALLOW \
-      "$PROMPT" < /dev/null ) > "$T" &
+      --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
+      -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!
   wait "$child"; RC=$?; child=""
 fi
