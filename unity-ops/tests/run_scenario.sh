@@ -84,11 +84,22 @@ if [ -n "${UNITY_OPS_ALLOW:-}" ]; then
 else
   # `Task` is this CLI's subagent tool (2.1.270 lists it in the init envelope, not `Agent`);
   # both are named so the envelope permits a subagent dispatch whichever the build exposes.  [T1.3]
+  # NO `Bash(unity command*)`.  [T4.0 round 6] [#38 branch (a)] [DESIGN.md Delta D19]
+  # That literal rule admitted ANY editor command -- `add_component`, `delete_gameobject`, `eval`,
+  # `open_scene` -- spelled with a literal path, from any cwd, against any project, whatever the
+  # permission hook decided. T4.0 did not enlarge that hazard (the literal-path route is unchanged)
+  # but it ACTIVATED it: Increment 4's children issue mutating editor commands as their normal job,
+  # so a child that takes a hook refusal is one "retry with an absolute path" away from the unscoped
+  # route. Removing the rule makes `tests/permission-hook.sh` the SOLE admitter of `unity command`:
+  # the read-only set (UNITY_COMMAND_RO, any cwd) plus the testbed live-edit set (five names, scoped
+  # to ~/Dev/Unity/ai_test, single segment). `Bash(unity test*)`/`Bash(unity build*)` stay --
+  # Increment 6 needs them. Each later increment declares the `unity command` names it needs through
+  # the hook, not here (Increment 7: `recompile`, `recompile_status`, `set_autotick`).
   ALLOW=(Read Grep Glob Write Edit Skill Agent Task \
          "Bash(. *)" "Bash(export *)" "Bash(grep *)" \
          "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
          "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
-         "Bash(unity command*)" "Bash(unity pipeline list*)" "Bash(unity test*)" \
+         "Bash(unity pipeline list*)" "Bash(unity test*)" \
          "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)" "Bash(git rev-parse*)" \
          "Bash(git -C * status*)" "Bash(git -C * diff*)" "Bash(git -C * rev-parse*)")
 fi
