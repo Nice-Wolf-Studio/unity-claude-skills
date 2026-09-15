@@ -1,0 +1,8 @@
+{
+  "name": "unity-ops",
+  "description": "Verification gates and control-surface guardrails for driving Unity 6+ through the Unity CLI. Sits above Unity's first-party unity-cli skill; adds enforcement rather than restating it.",
+  "version": "0.1.0",
+  "author": { "name": "Nice Wolf Studio" },
+  "repository": "https://github.com/Nice-Wolf-Studio/unity-claude-skills",
+  "license": "MIT"
+}

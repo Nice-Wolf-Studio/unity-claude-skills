@@ -1,0 +1,382 @@
+#!/bin/bash
+# unity-ops — shadow-mode guardrail hook (PreToolUse).
+# v1 NEVER denies. It logs, and for three patterns emits one advisory sentence.
+# Promotion to a hard gate = replacing one pattern's emit_advisory with emit_deny. See DESIGN.md §4A.
+set -u
+
+# --- Fail open #1: no stdin at all. ---
+INPUT=$(cat 2>/dev/null || true); [ -z "$INPUT" ] && exit 0
+
+# --- Fail open #2, the cheap pre-filter: bounded field extraction, then a BOUNDARY-AWARE match.
+#     No subprocess, no fork, no python, no jq. Only `command`, `file_path`/`notebook_path`/`path`
+#     and `skill` are examined — never `cwd` (a Unity-NAMED directory is not a Unity operation)
+#     and never `content` (prose about a "community" is not a unity invocation). This is the
+#     path that runs on every Bash/Write/Edit/MultiEdit/NotebookEdit/Skill call in every
+#     non-Unity session.  [R4-E1] ---
+UO_V=""
+uo_field() {                      # $1 = json key -> sets UO_V to a bounded, de-escaped value.
+  UO_V=""                         # Tolerates both `"k":"v"` and `"k": "v"` spacing.
+  case "$INPUT" in *"\"$1\":"*) ;; *) return 0 ;; esac
+  UO_V="${INPUT#*"\"$1\":"}"
+  while [ -n "$UO_V" ]; do        # skip the (at most a few) whitespace chars after the colon
+    case "$UO_V" in [[:space:]]*) UO_V="${UO_V#?}" ;; *) break ;; esac
+  done
+  case "$UO_V" in \"*) UO_V="${UO_V#\"}" ;; *) UO_V=""; return 0 ;; esac   # null/number -> nothing
+  UO_V="${UO_V:0:65536}"          # bound: the pre-filter never scans more than 64 KB  [R4-M4]
+  UO_V="${UO_V//\\\\/}"           # drop escaped backslashes first
+  UO_V="${UO_V//\\\"/}"           # then escaped quotes, so the next line cuts at the REAL close
+  UO_V="${UO_V%%\"*}"
+}
+uo_unityish() {                   # true only when `unity` appears as a WORD, not inside one
+  case "$1" in                    # "community"/"opportunity"/"impunity" must NOT match
+    unity|unity[!A-Za-z0-9_]*|*[!A-Za-z0-9_]unity|*[!A-Za-z0-9_]unity[!A-Za-z0-9_]*) return 0 ;;
+  esac
+  return 1
+}
+UO_HIT=0
+# An OVERSIZED payload is never guessed at: the bounded string ops below are the one part of
+# this script whose cost grows with payload size, so above the window we hand straight to the
+# classifier (which has its own 64 KB bound) rather than risk a missed record.  [R4-E1] [R4-M4]
+if [ "${#INPUT}" -gt 262144 ]; then UO_HIT=1; fi
+shopt -s nocasematch
+[ "$UO_HIT" = 1 ] || uo_field command
+if [ -n "$UO_V" ] && uo_unityish "$UO_V"; then UO_HIT=1; fi
+if [ "$UO_HIT" = 0 ]; then
+  uo_field file_path
+  [ -z "$UO_V" ] && uo_field notebook_path
+  [ -z "$UO_V" ] && uo_field path
+  case "$UO_V" in
+    *.unity|*.prefab|*.asset|*.cs) UO_HIT=1 ;;                          # NOT .css / .assets
+    *.unity.meta|*.prefab.meta|*.asset.meta|*.cs.meta) UO_HIT=1 ;;
+  esac
+fi
+if [ "$UO_HIT" = 0 ]; then
+  uo_field skill
+  if [ -n "$UO_V" ] && uo_unityish "$UO_V"; then UO_HIT=1; fi
+fi
+shopt -u nocasematch
+[ "$UO_HIT" = 1 ] || exit 0
+
+# --- Fail open #3: no WORKING python3. Exit-code, not path-existence: macOS ships a
+#     /usr/bin/python3 xcselect STUB that exists on PATH and fails without the Command Line
+#     Tools, and `command -v` cannot tell the two apart.  [R4-E2] ---
+python3 -c 'pass' >/dev/null 2>&1 || exit 0
+
+# --- The classifier. Quote-aware segmentation via shlex; heredoc bodies stripped; wrappers
+#     peeled; shell keywords stripped; `bash -c`/`sh -c`/`eval`/$(…)/backticks recursed one
+#     level. [R3-3] [R4-F5] ---
+read -r -d '' UNITY_OPS_PY <<'PY' || true
+import datetime, json, os, pathlib, re, shlex, sys
+
+CMD_SCAN_MAX = 65536      # bytes of `command` that are CLASSIFIED   [R4-M4]
+CMD_STORE_MAX = 2048      # bytes of `command` that are RECORDED     [R4-M4]
+
+def out_nothing(): sys.exit(0)
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    out_nothing()
+if not isinstance(d, dict): out_nothing()
+
+tool    = d.get("tool_name") or ""
+ti      = d.get("tool_input") or {}
+if not isinstance(ti, dict): ti = {}
+cwd     = d.get("cwd") or ""
+cmd_raw = ti.get("command") or ""
+if not isinstance(cmd_raw, str): cmd_raw = str(cmd_raw)
+cmd     = cmd_raw[:CMD_SCAN_MAX]
+fpath   = ti.get("file_path") or ti.get("path") or ti.get("notebook_path") or ""
+bg      = ti.get("run_in_background", False)
+session = d.get("session_id") or ""
+skill   = ti.get("skill") or ""
+# Subagent discriminator when the harness supplies one; session_id is the fallback.  [R4-M4]
+agent_id   = d.get("agent_id") or d.get("subagent_id") or ""
+agent_type = d.get("agent_type") or d.get("subagent_type") or ""
+
+# ---------- Unity project root. NEVER $PWD (CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1). ----------
+def walk_up(start):
+    if not start or not start.startswith("/"): return ""
+    p = pathlib.Path(start)
+    for c in [p, *p.parents]:
+        try:
+            if (c / "ProjectSettings" / "ProjectVersion.txt").is_file(): return str(c)
+        except OSError:
+            return ""
+    return ""
+proj = walk_up(cwd) or (walk_up(str(pathlib.Path(fpath).parent)) if fpath else "")
+
+# ---------- 1. strip heredoc bodies ----------
+HD = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|([A-Za-z_][A-Za-z0-9_]*))")
+def strip_heredocs(text):
+    lines, keep, i = text.split("\n"), [], 0
+    while i < len(lines):
+        line = lines[i]; keep.append(line); i += 1
+        m = HD.search(line)
+        if not m: continue
+        dash = m.group(1) == "-"
+        marker = m.group(2) or m.group(3) or m.group(4) or ""
+        if not marker: continue
+        while i < len(lines):
+            probe = lines[i].lstrip("\t") if dash else lines[i]
+            i += 1
+            if probe.rstrip() == marker: break
+    return "\n".join(keep)
+
+# ---------- 2. pull out $( … ) and ` … ` for one-level recursion; neutralise unquoted \n ----------
+SPECIAL = set("\\'\"$`\n")
+def extract_subs(text):
+    subs, buf, i, n = [], [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\" and i + 1 < n:
+            buf.append(c); buf.append(text[i+1]); i += 2; continue
+        if c == "'":
+            j = text.find("'", i + 1)
+            if j < 0: buf.append(text[i:]); break
+            buf.append(text[i:j+1]); i = j + 1; continue
+        if c == '"':
+            j, esc = i + 1, False
+            while j < n:
+                if esc: esc = False
+                elif text[j] == "\\": esc = True
+                elif text[j] == '"': break
+                j += 1
+            inner = text[i+1:j]
+            si, sl = extract_subs(inner)
+            subs.extend(sl); buf.append('"' + si + '"'); i = j + 1; continue
+        if c == "$" and i + 1 < n and text[i+1] == "(":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text[j] == "(": depth += 1
+                elif text[j] == ")": depth -= 1
+                j += 1
+            subs.append(text[i+2:j-1]); buf.append(" "); i = j; continue
+        if c == "`":
+            j = text.find("`", i + 1)
+            if j < 0: buf.append(" "); break
+            subs.append(text[i+1:j]); buf.append(" "); i = j + 1; continue
+        j = i                                    # bulk-copy the run of ordinary characters
+        while j < n and text[j] not in SPECIAL: j += 1
+        if j > i: buf.append(text[i:j]); i = j; continue
+        buf.append(";" if c == "\n" else c); i += 1
+    return "".join(buf), subs
+
+SEPS = {";", "|", "||", "&", "&&", "|&", ";;"}
+def split_segments(text):
+    """Quote-aware segmentation. Returns a list of token-lists."""
+    try:
+        lex = shlex.shlex(text, posix=True, punctuation_chars=";|&")
+        lex.whitespace_split = True
+        toks = list(lex)
+    except ValueError:
+        try:
+            toks = shlex.split(text, posix=True)
+        except ValueError:
+            toks = text.split()
+    segs, cur = [], []
+    for t in toks:
+        if t in SEPS or set(t) <= {";", "|", "&"} and t:
+            if cur: segs.append(cur); cur = []
+        else:
+            cur.append(t)
+    if cur: segs.append(cur)
+    return segs
+
+# ---------- 2b. shell keywords and compound-command heads  [R4-F5] ----------
+KEYWORDS  = {"do", "then", "else", "elif", "fi", "done", "esac", "!", "{", "}", "(", ")"}
+LOOPHEAD  = {"for", "while", "until", "select"}
+def strip_keywords(toks):
+    """`for p in a b; do unity close $p; done` segments to [for…][do unity close $p][done];
+       this makes the SECOND segment's first word `unity` again."""
+    t = list(toks)
+    while t:
+        w = t[0]
+        w2 = w.lstrip("({")
+        if w2 != w:
+            t = ([w2] + t[1:]) if w2 else t[1:]
+            continue
+        if w in KEYWORDS: t = t[1:]; continue
+        if w in LOOPHEAD: return []          # `for p in a b` carries no command of its own
+        if w == "if":     t = t[1:]; continue
+        if w == "case":                      # drop through the `<pattern>)` terminator
+            for k in range(1, len(t)):
+                if t[k].endswith(")"): t = t[k+1:]; break
+            else: return []
+            continue
+        break
+    return t
+
+NUMISH = re.compile(r"^[0-9]+(\.[0-9]+)?[smhd]?$")
+def peel(toks):
+    """Strip leading wrappers. Returns (tokens, recurse_payloads)."""
+    rec = []
+    t = strip_keywords(toks)
+    while t:
+        w = t[0]
+        if "=" in w and not w.startswith("=") and "/" not in w.split("=")[0]:
+            t = strip_keywords(t[1:]); continue
+        base = w.rsplit("/", 1)[-1]
+        if base == "env":
+            t = t[1:]
+            while t and (("=" in t[0] and not t[0].startswith("-")) or t[0] in ("-i", "--ignore-environment")): t = t[1:]
+            continue
+        if base in ("sudo", "doas"):
+            t = t[1:]
+            while t and t[0].startswith("-"):
+                if t[0] in ("-u", "-g", "-U", "--user", "--group") and len(t) > 1: t = t[2:]
+                else: t = t[1:]
+            continue
+        if base in ("nohup", "exec", "time", "builtin", "setsid", "stdbuf", "caffeinate", "nice", "ionice"):
+            t = t[1:]; continue
+        if base == "command":
+            t = t[1:]
+            while t and t[0] in ("-p", "-v", "-V"): t = t[1:]
+            continue
+        if base == "timeout":
+            t = t[1:]
+            while t and t[0].startswith("-"):
+                if t[0] in ("-s", "-k", "--signal", "--kill-after") and len(t) > 1: t = t[2:]
+                else: t = t[1:]
+            if t and NUMISH.match(t[0]): t = t[1:]
+            continue
+        if base == "xargs":
+            t = t[1:]
+            while t and t[0].startswith("-"):
+                if t[0] in ("-I", "-n", "-P", "-d", "-L", "-s", "-E") and len(t) > 1: t = t[2:]
+                else: t = t[1:]
+            continue
+        break
+    if t:
+        base = t[0].rsplit("/", 1)[-1]
+        if base in ("bash", "sh", "zsh", "dash", "ksh"):
+            for k in range(1, len(t)):
+                if t[k] == "-c" and k + 1 < len(t): rec.append(t[k+1]); return ([], rec)
+                if t[k] in ("-lc", "-ic") and k + 1 < len(t): rec.append(t[k+1]); return ([], rec)
+        if base in ("eval", "source", "."):
+            if len(t) > 1: rec.append(" ".join(t[1:]))
+            return ([], rec)
+    return (t, rec)
+
+# ---------- 3. classify ----------
+GROUP = {"projects","editors","plugin","pipeline","skill","vcs","command","job","licenses","modules"}
+SEVERITY = ["destructive-cli","live-eval","serialized-asset-write","cs-write",
+            "live-mutation","batch-launch","live-readback","recompile-confirm",
+            "skill-invocation","unity-invocation"]
+found = {}          # pattern -> subcommand that produced it ("" when none)
+cs_write = False
+pp = ""             # --project-path value seen in a unity segment
+
+def add(p, sub=""):
+    if p not in found: found[p] = sub
+
+def classify_unity(t):
+    global cs_write, pp
+    before = set(found)
+    t2 = t[1] if len(t) > 1 else ""
+    t3 = t[2] if len(t) > 2 else ""
+    flags = set(x.split("=", 1)[0] for x in t)
+    for i, x in enumerate(t):
+        if x == "--project-path" and i + 1 < len(t): pp = pp or t[i+1]
+        elif x.startswith("--project-path="): pp = pp or x.split("=", 1)[1]
+    sub = t3 if t2 in GROUP else t2
+    sub = sub or t2
+    dx = False
+    if t2 in ("close", "self-update", "self-uninstall", "uninstall"): dx = True
+    if t2 == "projects" and t3 == "clean": dx = True
+    if t2 == "editors"  and t3 == "prune" and "--remove" in flags: dx = True
+    if flags & {"--allow-install", "--yes", "--force"}: dx = True
+    if dx: add("destructive-cli", sub)
+    if t2 == "command":
+        if t3 in ("eval", "eval_file"):        add("live-eval", sub)
+        elif t3 == "recompile_status":         add("recompile-confirm", sub)
+        elif t3 in ("find_gameobjects","get_scene_hierarchy","save_scene","save_all"):
+                                               add("live-readback", sub)
+        elif t3 in ("create_gameobject","set_transform","add_component","rename_gameobject",
+                    "delete_gameobject","attach_script","create_script"):
+            add("live-mutation", sub)
+            if t3 == "create_script": cs_write = True
+    if t2 in ("build", "test", "run"):         add("batch-launch", sub)
+    if not (set(found) - before):              add("unity-invocation", sub)
+
+def scan(text, depth=0):
+    if depth > 1 or not text: return
+    body, subs = extract_subs(strip_heredocs(text))
+    for seg in split_segments(body):
+        if not seg: continue
+        toks, rec = peel(seg)
+        for r in rec: scan(r, depth + 1)
+        if not toks: continue
+        base = toks[0].rsplit("/", 1)[-1]
+        joined = " ".join(toks)
+        if base in ("pkill", "killall") and re.search(r"[Uu]nity", joined):
+            add("destructive-cli", base); continue
+        if base != "unity": continue
+        classify_unity(toks)
+    for s in subs: scan(s, depth + 1)
+
+SER = (".unity", ".prefab", ".asset")
+if tool == "Bash":
+    scan(cmd)
+elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
+    if not proj: out_nothing()
+    low = fpath.lower()
+    stem = low[:-5] if low.endswith(".meta") else low
+    if stem.endswith(SER):  add("serialized-asset-write")
+    elif stem.endswith(".cs"): add("cs-write"); cs_write = True
+elif tool == "Skill":
+    if skill: add("skill-invocation", "")
+if not found: out_nothing()
+
+patterns = [p for p in SEVERITY if p in found]
+pattern  = patterns[0]
+sub      = found.get(pattern, "")
+if not sub:
+    for p in patterns:
+        if found.get(p): sub = found[p]; break
+if not proj and pp:
+    proj = pp if pp.startswith("/") else pp
+
+state = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state"), "unity-ops")
+scen = ""
+try:
+    with open(os.path.join(state, "scenario.current")) as f:
+        scen = f.read().replace("\n", "").replace("\r", "")[:120]
+except Exception:
+    scen = ""
+has_timeout = "yes" if re.search(r"--timeout|UNITY_BUILD_TIMEOUT|UNITY_TEST_TIMEOUT|UNITY_RUN_TIMEOUT", cmd) else "no"
+cmd_store = cmd_raw[:CMD_STORE_MAX]
+rec = {
+  "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+  "session_id": session, "agent_id": agent_id, "agent_type": agent_type,
+  "scenario": scen, "tool": tool,
+  "patterns": patterns, "pattern": pattern, "subcommand": sub,
+  "command": cmd_store, "command_truncated": len(cmd_raw) > CMD_STORE_MAX,
+  "file": fpath, "skill": skill, "project": proj,
+  "background": "true" if bg is True else ("false" if bg is False else str(bg)),
+  "has_timeout": has_timeout, "cs_write": cs_write, "decision": "log",
+}
+try:
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(state, "decisions.jsonl"), "a") as f:
+        f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+except Exception:
+    pass
+
+ADVISE = {"destructive-cli": "unity-ops:unity-destructive-gate",
+          "serialized-asset-write": "unity-ops:unity-surface-preflight",
+          "live-eval": "unity-ops:unity-live-edit-verification"}
+# T1.3 Observation 3 sets UNITY_OPS_ADVISORY_NONCE so "the model quoted the advisory" is
+# falsifiable rather than a plausible paraphrase. Absent in every real session.  [R3-9]
+nonce = os.environ.get("UNITY_OPS_ADVISORY_NONCE", "")
+for p in patterns:
+    if p in ADVISE:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+              "additionalContext": "unity-ops guardrail fired: " + p
+              + ". Advisory in v1 — confirm the check " + ADVISE[p] + " requires before proceeding."
+              + (" [" + nonce + "]" if nonce else "")}},
+              separators=(",", ":")))
+        break
+sys.exit(0)
+PY
+printf '%s' "$INPUT" | python3 -c "$UNITY_OPS_PY" 2>/dev/null || true
+exit 0
