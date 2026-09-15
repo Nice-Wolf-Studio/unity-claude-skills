@@ -146,6 +146,11 @@ VECTOR_OK = re.compile(r'^[-+0-9.,\[\]{}":xyzXYZ ]+$')
 UNITY_LIVE_EDIT_FLAGS = frozenset({"--json", "--no-pager", "--verbose"})
 # Set when a live-edit admission is what carried the command, so the log line names the right set.
 LIVE_EDIT = [False]
+# Where the segment under examination sits in the whole command. The live-edit set is admitted only
+# as the LAST segment, preceded by nothing but a prelude (`. "$HOME/.unity/env"` / `export UNITY_*=`)
+# -- and by nothing at all when `--project-path` is absent, because then the hook's cwd is the only
+# thing standing in for the shell's.  [round-6 review F6-1]
+SEG_CTX = {"nothing_before": True, "prelude_before": True, "nothing_after": True}
 UNITY_DESTRUCTIVE_FLAGS = {"--yes", "--force", "--allow-install", "--confirm"}
 UNITY_SKILL_TAIL = {"--format", "json", "--no-pager"}   # the ONLY tokens allowed after `--list`
 # `unity vcs affected [path] [options]` — read-only reporting (T3.1). Flags that take no value
@@ -179,7 +184,13 @@ GIT_BAD = ("-c", "--config-env", "--exec-path", "--git-dir", "--work-tree",
 # --jsonargs --tab --indent --raw-output --compact-output --null-input --sort-keys --slurp …
 JQ_BAD_LONG = ("--rawfile", "--slurpfile", "--from-file", "--library-path", "--run-tests")
 JQ_BAD_CHARS = "fL"      # -f/--from-file read the program; -L adds a module search path
-PLAIN = {"cd", "pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
+# `cd` was in this set from round 1, when nothing in the set could write and the review judged it
+# harmless -- correctly, then. T4.0 invalidated that: the live-edit set's blast radius is a function
+# of cwd, and a `cd` segment moves the COMMAND's shell while the hook's own cwd predicate cannot
+# move, so `cd /tmp && unity command save_all` was admitted and two other real Unity projects live
+# under ~/Dev/Unity/ (round-6 review F6-1). `pushd`/`popd` were never in the set. A scenario child
+# starts in the testbed and has no need to move.
+PLAIN = {"pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
          "tr", "cut", "test", "[", "which", "true", "date",
          "basename", "dirname", "realpath"}
 
@@ -215,6 +226,19 @@ try:
     HOOK_CWD = os.path.realpath(os.getcwd())
 except Exception:
     HOOK_CWD = ""
+
+def is_prelude(seg):
+    """A segment that may legitimately precede a live-edit command: sourcing the unity env file, or
+       exporting a UNITY_* literal. Both are already admitted on their own terms; neither can change
+       the shell's cwd, which is the property the live-edit scoping depends on."""
+    if not seg:
+        return True
+    w = seg[0]
+    if w in (".", "source"):
+        return len(seg) == 2 and seg[1] in SOURCE_OK
+    if w == "export":
+        return len(seg) >= 2 and all(EXPORT_OK.match(t) for t in seg[1:])
+    return False
 
 def in_testbed():
     """Condition (1): the hook PROCESS's own cwd is the testbed. Resolved once, from os.getcwd(),
@@ -271,7 +295,13 @@ def value_ok(v):
 def vector_ok(v):
     """`--position` / `--rotation` / `--scale`. See UNITY_LIVE_EDIT_VECTOR."""
     if not v or not VECTOR_OK.match(v):
-        return "vector value outside the numeric/bracket/brace character class: " + v
+        return "vector value outside the numeric/bracket character class: " + v
+    for ch in "{}":
+        # `--position {1..3}` matches the character class and bash expands it to THREE words;
+        # `{a,b}` is the same machinery. Refusing the braces costs the `{"x":1,"y":2,"z":3}` JSON
+        # spelling, which no rep has ever been observed using.  [round-6 review F6-3]
+        if ch in v:
+            return "vector value with a brace-expansion character: " + v
     if not any(c.isdigit() for c in v):
         return "vector value with no digit: " + v
     return ""
@@ -287,6 +317,10 @@ def save_path_ok(v):
         return "save_scene --path must be relative, not absolute: " + v
     if not v.startswith("Assets/"):
         return "save_scene --path outside Assets/: " + v
+    if not v.endswith(".unity"):
+        # Writing scene YAML over `SampleScene.unity.meta` corrupts an asset's GUID binding, and a
+        # reviewer reading a GATE diff would not recognise it as that.  [round-6 review F6-2]
+        return "save_scene --path does not end in .unity: " + v
     return ""
 
 def live_edit_tail_ok(name, tokens):
@@ -534,6 +568,22 @@ def words_ok(words):
                 if not in_testbed():
                     return ("unity command " + rest[1] + ": the live-edit set is admitted only with"
                             " the hook's own cwd at the testbed")
+                # The hook's cwd predicate stands in for the SHELL's cwd, and that substitution is
+                # only sound when no other segment can have moved the shell -- `cd` is gone from the
+                # set, but a future addition, or a `$PWD` the hook resolves against ITS cwd while
+                # bash expands it after something else, would re-open it. So: last segment, nothing
+                # but a prelude before it.  [round-6 review F6-1]
+                if not SEG_CTX["nothing_after"]:
+                    return ("unity command " + rest[1] + ": the live-edit set is admitted only as"
+                            " the last segment of the command")
+                if not SEG_CTX["prelude_before"]:
+                    return ("unity command " + rest[1] + ": the live-edit set admits no segment"
+                            " before it other than the unity env source or an export UNITY_*")
+                has_pp = any(t == "--project-path" or t.startswith("--project-path=")
+                             for t in rest[2:])
+                if not has_pp and not SEG_CTX["nothing_before"]:
+                    return ("unity command " + rest[1] + ": without --project-path the live-edit set"
+                            " is admitted only as the WHOLE command")
                 why = live_edit_tail_ok(rest[1], rest[2:])
                 if why:
                     return why
@@ -700,9 +750,11 @@ def evaluate(cmd):
         else:
             cur.append(t)
     segs.append(cur)
-    for seg in segs:
-        if not seg:
-            continue
+    segs = [s for s in segs if s]
+    for i, seg in enumerate(segs):
+        SEG_CTX["nothing_before"] = (i == 0)
+        SEG_CTX["prelude_before"] = all(is_prelude(s) for s in segs[:i])
+        SEG_CTX["nothing_after"] = (i == len(segs) - 1)
         why = check_segment(seg)
         if why:
             return why

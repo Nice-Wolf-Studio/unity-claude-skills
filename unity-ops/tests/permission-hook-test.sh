@@ -198,7 +198,43 @@ pass	-	unity test
 pass	-	unity build
 pass	-	unity test --affected
 pass	-	unity test --affected --help
+# ---- ROUND-6 REVIEW (F6-1..F6-3) — cwd scoping, segment position, .unity suffix, braces ----
+# F6-1 — a `cd` segment moved the COMMAND's shell while the hook's cwd predicate could not move
+pass	TESTBED	cd /tmp && unity command save_all --project-path "$PWD" --format json
+pass	TESTBED	cd /tmp && unity command save_all
+pass	TESTBED	cd /Users/jeremymiranda/Dev/Unity/ai_test/.. && unity command save_all
+pass	TESTBED	cd /tmp; unity command save_all
+pass	TESTBED	cd "/Users/jeremymiranda/Dev/Unity/My project" && unity command save_all
+pass	TESTBED	cd ../SyntySampler && unity command save_all
+pass	TESTBED	echo hi && cd /tmp && unity command save_all
+pass	TESTBED	cd /tmp && unity command create_gameobject --name X --primitive Cube
+pass	TESTBED	cd /tmp && unity status --format json
+pass	TESTBED	cd /tmp
+pass	TESTBED	pushd /tmp
+pass	TESTBED	popd
+pass	-	cd /tmp && unity command editor_status
+# F6-1(b) — the live-edit set must be the last segment, preceded by nothing but a prelude
+pass	TESTBED	echo hi && unity command save_all --project-path "$PWD" --format json
+pass	TESTBED	unity command save_all --project-path "$PWD" --format json; unity close "$PWD"
+pass	TESTBED	unity command save_all --project-path "$PWD" --format json | tee /tmp/o
+pass	TESTBED	unity command find_gameobjects --name Main --project-path "$PWD" --format json | jq .
+pass	TESTBED	pwd && unity command save_all --project-path "$PWD" --format json
+# F6-1(c) — without --project-path the live-edit segment must be the WHOLE command
+pass	TESTBED	. "$HOME/.unity/env"; unity command save_all
+pass	TESTBED	export UNITY_NO_BANNER=1; unity command save_all
+# F6-2 — save_scene --path must end in .unity
+pass	TESTBED	unity command save_scene --path Assets/Scenes/SampleScene.unity.meta --project-path "$PWD" --format json
+pass	TESTBED	unity command save_scene --path Assets/x.txt --project-path "$PWD" --format json
+pass	TESTBED	unity command save_scene --path Assets/Scenes/SampleScene --project-path "$PWD" --format json
+# F6-3 — brace RANGES expand to several words, like brace lists
+pass	TESTBED	unity command set_transform --target X --position {1..3} --project-path "$PWD" --format json
+pass	TESTBED	unity command set_transform --target X --position {1,2,3} --project-path "$PWD" --format json
 # ---- the read-only set: these MUST be `allow` ----
+allow	TESTBED	. "$HOME/.unity/env"; unity command find_gameobjects --name Main --project-path "$PWD" --format json
+allow	TESTBED	export UNITY_NO_BANNER=1; unity command save_all --project-path "$PWD" --format json
+allow	TESTBED	unity command save_all
+allow	TESTBED	unity command save_scene --path Assets/Scenes/SampleScene.unity --project-path "$PWD" --format json
+
 allow	-	unity test --help | grep -i affected
 allow	-	unity test --help | grep -ci affected
 allow	-	unity build --help
@@ -241,7 +277,7 @@ allow	-	git log --oneline -5
 allow	-	git -C "$PWD" diff --no-index a b
 allow	-	cat ProjectSettings/ProjectVersion.txt 2>/dev/null
 allow	-	jq '.data.summary' file.json
-allow	-	cd /tmp && unity status
+pass	-	cd /tmp && unity status
 allow	-	test -f ProjectSettings/ProjectVersion.txt
 allow	-	which unity
 allow	-	wc -l file
@@ -291,7 +327,7 @@ allow	TESTBED	unity command save_scene --project-path "$PWD" --format json
 allow	TESTBED	unity command set_transform --target Spawner --position -4,0,3 --project-path "$PWD" --format json
 allow	TESTBED	unity command set_transform --target Spawner --position [-4,0,3] --project-path "$PWD" --format json
 allow	TESTBED	unity command set_transform --target Spawner --position=-4,0,3 --project-path "$PWD" --format json
-allow	TESTBED	unity command set_transform --target Spawner --position {"x":1.2,"y":0,"z":3.4} --project-path "$PWD" --format json
+pass	TESTBED	unity command set_transform --target Spawner --position {"x":1.2,"y":0,"z":3.4} --project-path "$PWD" --format json
 allow	TESTBED	unity command set_transform --target Spawner --position -4 0 3 --rotation 0 -90 0 --scale 1 1 1 --project-path "$PWD" --format json
 pass	TESTBED	unity command set_transform --target Spawner --position -rf --project-path "$PWD" --format json
 pass	TESTBED	unity command set_transform --target Spawner --position "$(id)" --project-path "$PWD" --format json
@@ -375,7 +411,7 @@ pass	TESTBED	unity command create_gameobject --name X --project-path "$PWD" --fo
 pass	TESTBED	unity command create_gameobject --name X --project-path "$PWD" --format json && rm -rf /tmp/unity-ops-z
 pass	TESTBED	unity command create_gameobject --name X --project-path "$PWD" --format json<NL>rm -rf /tmp/unity-ops-z
 pass	TESTBED	unity status; unity command create_gameobject --name X --project-path "$PWD" --format json; unity close
-allow	TESTBED	unity status --format json && unity command create_gameobject --name X --project-path "$PWD" --format json
+pass	TESTBED	unity status --format json && unity command create_gameobject --name X --project-path "$PWD" --format json
 TABLE_EOF
 
 python3 - "$HOOK" "$TMP/table.tsv" "$HERE" "$TESTBED" <<'PY'
