@@ -50,10 +50,24 @@ What it is and is not:
 
 - **It never returns `deny`.** It can only *admit*; under `dontAsk` the default already denies, so a
   bug in the hook fails closed (denied), never open.
-- **It changes the matching mechanism, not the admitted set.** `ALLOW` and `UNITY_OPS_ALLOW` are
-  untouched. Every entry in the hook's set has a counterpart in `ALLOW`, plus the pure text filters
-  (`jq`, `grep`, `head`, `wc`, `sed -n`, …) a probe uses on its **own** output. Adding to the set
-  widens the envelope and needs the same scrutiny as adding a `Bash(...)` rule.
+- **It changes the matching mechanism for `ALLOW`'s prefixes. Its set is not `ALLOW`'s set, and the
+  delta runs in both directions** — `ALLOW` and `UNITY_OPS_ALLOW` themselves are untouched.
+  - **Admitted expansion-tolerantly, from `ALLOW`:** the `unity`, `git`, `.`, `export` and `grep`
+    prefixes — in several places **narrower** than `ALLOW` (below).
+  - **Plus, not in `ALLOW`:** filters a probe runs over its **own** output, and only ones with no
+    option that writes a file or executes a program — `cat head tail wc tr cut basename dirname
+    realpath echo printf pwd ls date true test [ command which jq grep`, plus `cd`, which likewise
+    cannot write or execute. `jq` additionally refuses `--rawfile`/`--slurpfile`/`-f`/`--from-file`
+    (they read an arbitrary file; jq cannot write one), and `command` is allowed only as `command -v`
+    (`command rm -rf x` **runs** `rm`). `git log` and `git show` are admitted too, which `ALLOW`
+    carries for neither.
+  - **Minus, still admitted by `ALLOW` literally:** `unity test` and `unity build`. Neither is
+    read-only — a junit report, a build output — so the hook refuses both; `Bash(unity test*)` and
+    `Bash(unity build*)` remain in the `ALLOW` array and a **literal** (expansion-free) spelling of
+    either is still admitted by that route.
+  - **Never in either:** `awk`, `sed`, `find`, `sort`, `uniq`. See the narrowing bullet.
+
+  Adding to the set widens the envelope and needs the same scrutiny as adding a `Bash(...)` rule.
 - **It is harness-only and is never staged.** `stage.sh` copies `.claude-plugin/`, `hooks/` and the
   named `skills/<name>/` directories and nothing else; no `tests/` file reaches
   `/tmp/unity-ops-stage`, so no plugin consumer ever gets this hook.  [G18] [G20]
@@ -61,10 +75,32 @@ What it is and is not:
   anywhere in the string, any `>`/`>>`/`<` redirection other than to `/dev/null` or an `fd` dup
   (`2>&1`), heredocs, `(`/`)` grouping, and any segment whose command word is outside the set. Every
   segment of a `;`/`&&`/`||`/`|`/newline chain must pass; one bad segment refuses the whole command.
-- **Narrowed beyond the bare command word**, because these write files without a shell redirection
-  the segment scanner could see: `sort -o`/`--output` and `uniq IN OUT` are refused; `sed` needs `-n`
-  and refuses `-i`; `awk` refuses any program text containing `>`, `|` or `system(`; `find` refuses
-  the `-delete`/`-exec`/`-fprint` family; `command` is allowed only as `command -v`.
+- **`awk`, `sed`, `find`, `sort` and `uniq` are not in the set at all.** Each writes a file or runs a
+  program through a channel no tokenizer can see, because it lives inside a quoted program token or
+  an option value: `awk 'BEGIN{system ("…")}'` (one space before the paren defeats any substring
+  test, and it is full arbitrary execution), `sed -n 'w /path'` and `s/…/…/w /path`, `find -fprint0`
+  (macOS `/usr/bin/find` lacks it, but Claude Code's shell snapshot shadows `find` with `bfs`, which
+  implements it), `sort --compress-program=`, `uniq IN OUT`. A probe uses `grep`/`head`/`cut`/`jq`,
+  or the `Grep` and `Glob` tools, instead.
+- **Narrowed beyond the bare command word**, because these execute or write with no shell redirection
+  for the segment scanner to see:
+  - A segment beginning with a `NAME=value` assignment is **refused, not stripped**:
+    `GIT_EXTERNAL_DIFF=/bin/sh git diff` runs a worktree file as a shell script, and `PATH=…` /
+    `DYLD_INSERT_LIBRARIES=…` are the same shape. The harness exports every `UNITY_*` variable a
+    probe needs before the dispatch, so nothing legitimate needs a leading assignment.
+  - `export` is allowed only when **every** argument matches `UNITY_[A-Z0-9_]+=<literal>` (no `$`,
+    no backtick). `export PATH=…`, `export GIT_EXTERNAL_DIFF=…` and bare `export NAME` are refused.
+  - `.`/`source` takes exactly one argument and it must be `"$HOME/.unity/env"`, `$HOME/.unity/env`,
+    `~/.unity/env`, or an absolute path ending `/.unity/env`.
+  - `git` must be `git [-C <path>] <status|diff|rev-parse|log|show> [args]`, and the whole segment is
+    refused if **any** token starts with `-c`, `--config-env`, `--exec-path`, `--git-dir`,
+    `--work-tree`, `--output`, `--ext-diff`, `--textconv`, `-O`, `-o` or `--orderfile`
+    (`git -c diff.external=/bin/sh diff` executes; `git diff --output=<path>` writes). `--no-index`
+    is fine.
+  - `unity skill install --list` is an **exact token match**, optionally followed only by `--format`,
+    `json`, `--no-pager`; `unity skill install <target> --list` is refused. `unity pipeline` is
+    `list` only; `unity command` is the five read-only editor commands; every
+    `--yes`/`--force`/`--allow-install`/`--confirm` spelling is refused outright.
 - **Limits — all of them over-refusals, which is the safe direction.** `#` is not treated as a
   comment (a comment could otherwise hide a second line from the hook that bash still runs), so a
   genuine inline comment refuses the command. A *quoted literal* `>` or `<` argument (`grep '>' f`)

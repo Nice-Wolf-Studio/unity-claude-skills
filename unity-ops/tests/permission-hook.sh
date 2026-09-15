@@ -7,8 +7,18 @@
 # T2.4 proved that with four one-shot probes (results/unity-surface-preflight.md, issue #28). The
 # `unity-surface-preflight` skill itself teaches `--arg p "$PWD"`, so every future rep would take a
 # denial, be graded INCONCLUSIVE, and need an `-allow` re-run against unrestricted `Bash` — a
-# cross-envelope comparison against the baselines. This hook changes the MATCHING MECHANISM, not the
-# admitted SET: it re-implements run_scenario.sh's `ALLOW` array post-expansion-tolerantly.
+# cross-envelope comparison against the baselines. This hook changes the MATCHING MECHANISM for the
+# `unity` / `git` / `.` / `export` / `grep` prefixes `ALLOW` already encodes: it re-implements them
+# post-expansion-tolerantly. The set is NOT identical to `ALLOW` — it also carries a short list of
+# text filters that can neither write a file nor execute a program (a probe pipes its own output
+# through them), and it does NOT carry `unity test` / `unity build`, which `ALLOW` still admits
+# literally. See tests/README.md for the exact delta.
+#
+# ROUND-1 REVIEW (task-2.4b-review.md) closed here: awk/sed/find/sort/uniq dropped outright (they
+# write files and shell out from INSIDE a quoted program token, where no tokenizer can see it);
+# leading `NAME=value` assignments refused (GIT_EXTERNAL_DIFF/PATH/DYLD_* -> arbitrary execution);
+# `export` narrowed to literal UNITY_* values; a git option denylist (-c, --output, --ext-diff, …);
+# `unity skill install --list` made an EXACT token match.
 #
 # THIS FILE IS NOT PART OF THE PLUGIN. It is never staged (`stage.sh` copies only
 # `.claude-plugin/`, `hooks/` and named `skills/<name>/` directories) and is passed to the child
@@ -57,35 +67,59 @@ if not isinstance(cmd_raw, str):
 session = d.get("session_id") or ""
 
 # ---------------------------------------------------------------- the read-only set
-# Every entry below has a counterpart in run_scenario.sh's ALLOW array, or is a pure text filter a
-# probe uses on its OWN output. Adding to this set WIDENS the envelope and needs the same scrutiny
-# as adding a `Bash(...)` rule.
-UNITY_SUB = {"--version", "--help", "status", "list", "command", "pipeline", "test", "build", "skill"}
+# TWO KINDS OF ENTRY, and nothing else may be added without the same scrutiny as a `Bash(...)` rule:
+#   (a) the `unity` / `git` / `.` / `export` / `grep` prefixes run_scenario.sh's ALLOW array already
+#       encodes, made expansion-tolerant and, in several places, NARROWER than ALLOW;
+#   (b) filters a probe runs over its OWN output that have NO option which writes a file or executes
+#       a program: cat head tail wc tr cut basename dirname realpath echo printf pwd ls date true
+#       test [ command which jq grep  (+ `cd`, which likewise cannot write or execute).
+# DELIBERATELY ABSENT (round-1 review C1/H1/H2/M-sort): awk, sed, find, sort, uniq. Each has a
+# documented channel that writes a file or runs a program from inside a token the tokenizer cannot
+# inspect -- `awk 'BEGIN{system ("…")}'` (a space before the paren defeats any substring test),
+# `sed -n 'w /path'` and `s///w`, `find -fprint0` (Claude Code's shell shadows find with bfs, which
+# implements it), `sort --compress-program=`, `uniq IN OUT`. A probe uses grep/head/cut/jq or the
+# Grep and Glob tools instead. ALSO ABSENT: `unity test` and `unity build` -- neither is read-only
+# (a junit report, a build output), even though ALLOW still admits both LITERALLY.
+UNITY_SUB = {"--version", "--help", "status", "list", "command", "pipeline", "skill"}
 UNITY_COMMAND_RO = {"editor_status", "list_open_scenes", "get_console_logs",
                     "get_scene_hierarchy", "get_editor_state"}
 UNITY_DESTRUCTIVE_FLAGS = {"--yes", "--force", "--allow-install", "--confirm"}
+UNITY_SKILL_TAIL = {"--format", "json", "--no-pager"}   # the ONLY tokens allowed after `--list`
 GIT_SUB = {"status", "diff", "rev-parse", "log", "show"}
-PLAIN = {"export", "cd", "pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
-         "tr", "sort", "uniq", "cut", "jq", "test", "[", "which", "true", "date",
+# git options that make git run a program or write a file without any shell redirection:
+#   -c diff.external=… / --config-env  -> arbitrary program;  --exec-path, --git-dir, --work-tree
+#   -> relocates what git executes / touches;  --output[=] -> writes a file;  --ext-diff, --textconv
+#   -> invokes the configured external program;  -O/--orderfile -> reads an arbitrary file.
+GIT_BAD = ("-c", "--config-env", "--exec-path", "--git-dir", "--work-tree",
+           "--output", "--ext-diff", "--textconv", "-O", "-o", "--orderfile")
+# jq cannot write a file; these read one, and the child is meant to stay on stdin/args.
+JQ_BAD = ("--rawfile", "--slurpfile", "-f", "--from-file")
+PLAIN = {"cd", "pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
+         "tr", "cut", "test", "[", "which", "true", "date",
          "basename", "dirname", "realpath"}
-FIND_WRITES = {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf", "-fls"}
 
-ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+ASSIGN     = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+EXPORT_OK  = re.compile(r"^UNITY_[A-Z0-9_]+=[^$`]*$")     # UNITY_* names, LITERAL values only
+SOURCE_OK  = {"$HOME/.unity/env", "~/.unity/env"}         # + any ABSOLUTE */.unity/env
 PUNCT  = "();<>|&"
 
 def words_ok(words):
     """'' when this segment's command word is in the read-only set; else the reason it is not."""
-    while words and ASSIGN.match(words[0]):     # leading `NAME=value` env-style assignments
-        words = words[1:]
     if not words:
-        return ""                               # assignments only: nothing is executed
+        return ""
+    # A leading `NAME=value` is REFUSED, not stripped (round-1 review C2/M-PATH/M-DYLD): it lets the
+    # child set GIT_EXTERNAL_DIFF, PATH, DYLD_INSERT_LIBRARIES, BASH_ENV … and then run an ADMITTED
+    # command, which is arbitrary execution with no `$(`, no redirection and no new command word.
+    # The harness exports every UNITY_* variable a probe needs before the dispatch.
+    if ASSIGN.match(words[0]):
+        return "leading NAME=value assignment: " + words[0].split("=", 1)[0]
     base = words[0].rsplit("/", 1)[-1]
     rest = words[1:]
 
     if base == "unity":
         if set(rest) & UNITY_DESTRUCTIVE_FLAGS:
             return "unity with an auto-confirm/destructive flag"
-        if "--help" in rest or "-h" in rest:
+        if "--help" in rest:
             return ""                           # `unity <anything> --help` only prints help
         if not rest:
             return ""                           # bare `unity` prints its own help
@@ -96,15 +130,26 @@ def words_ok(words):
             if len(rest) < 2 or rest[1] != "list":
                 return "unity pipeline: only `list` is read-only"
         elif s1 == "skill":
-            if len(rest) < 2 or rest[1] != "install" or "--list" not in rest:
-                return "unity skill: only `install --list` is read-only"
+            # EXACT token list. ALLOW's rule is the literal `Bash(unity skill install --list)`, which
+            # cannot match a command carrying an install target; `unity skill install <t> --list`
+            # must not be admitted by the hook either (round-1 review M2).
+            if rest[:3] != ["skill", "install", "--list"]:
+                return "unity skill: only the exact `skill install --list` form is read-only"
+            for t in rest[3:]:
+                if t not in UNITY_SKILL_TAIL:
+                    return "unity skill install --list with an extra argument: " + t
         elif s1 == "command":
             if len(rest) < 2 or rest[1] not in UNITY_COMMAND_RO:
                 return "unity command: editor command outside the read-only set"
         return ""
 
     if base == "git":
-        while len(rest) >= 2 and rest[0] == "-C":
+        for t in rest:
+            if t.startswith(GIT_BAD):
+                return "git option that can execute or write: " + t
+        if rest[:1] == ["-C"]:                  # the form is `git [-C <path>] <sub> [args]`
+            if len(rest) < 2:
+                return "git -C without a path"
             rest = rest[2:]
         if not rest:
             return "bare git"
@@ -115,59 +160,32 @@ def words_ok(words):
     if base in (".", "source"):
         if len(rest) != 1:
             return "source takes exactly one argument here"
-        if rest[0].endswith("/.unity/env"):
+        t = rest[0]
+        if t in SOURCE_OK or (t.startswith("/") and t.endswith("/.unity/env")):
             return ""
-        return "source target is not the unity env file: " + rest[0]
+        return "source target is not the unity env file: " + t
 
-    if base == "sed":
-        if "-n" not in rest:
-            return "sed without -n"
+    if base == "export":
+        # UNITY_* names with literal values only. `export PATH=…` / `export GIT_EXTERNAL_DIFF=…` is
+        # the same arbitrary-execution channel as a leading assignment; bare `export NAME` exports
+        # whatever that name was set to elsewhere.
+        if not rest:
+            return "bare export"
         for t in rest:
-            if t.startswith("-i") or t == "--in-place":
-                return "sed in-place edit"
+            if not EXPORT_OK.match(t):
+                return "export outside UNITY_*=<literal value>: " + t
         return ""
 
-    if base == "awk":
-        # awk can write files (`print > "f"`), pipe (`| "sh"`) and shell out (`system()`). Those
-        # live INSIDE the quoted program token, where the tokenizer cannot see them as operators.
+    if base == "jq":
         for t in rest:
-            if "system(" in t or ">" in t or "|" in t:
-                return "awk program may redirect, pipe or shell out"
-        return ""
-
-    if base == "find":
-        if set(rest) & FIND_WRITES:
-            return "find with a writing/executing primary"
+            if t.startswith(JQ_BAD):
+                return "jq option that reads an arbitrary file: " + t
         return ""
 
     if base == "command":
         if rest and rest[0] in ("-v", "-V"):
             return ""
-        return "command without -v"
-
-    # Two entries of the read-only set carry a file-WRITE channel that owes nothing to a shell
-    # redirection, so the redirection check above cannot see them. Narrowed here, at the command
-    # word, rather than left to be discovered later:  `sort -o OUT`, and `uniq IN OUT`.
-    if base == "sort":
-        for t in rest:
-            if t.startswith("-o") or t.startswith("--output"):
-                return "sort -o writes a file"
-        return ""
-    if base == "uniq":
-        # a `-f N` / `-s N` / `-w N` argument is an option value, not an operand
-        skip, cleaned = False, []
-        for t in rest:
-            if skip:
-                skip = False
-                continue
-            if t in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
-                skip = True
-                continue
-            if not t.startswith("-"):
-                cleaned.append(t)
-        if len(cleaned) > 1:
-            return "uniq with an output-file operand"
-        return ""
+        return "command without -v"             # `command rm -rf x` RUNS rm
 
     if base in PLAIN:
         return ""
