@@ -84,6 +84,8 @@ else
          "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)")
 fi
 FMT="${UNITY_OPS_FORMAT:-json}"
+# Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
+# a skill that holds Sonnet under pressure holds Opus. Verified: `claude -p --model sonnet` accepted on 2.1.270.
 if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
   ( exec sleep "${UNITY_OPS_DRYSLEEP:-2}" ) & child=$!
   wait "$child"; RC=$?; child=""
@@ -92,6 +94,7 @@ else
   ( cd ~/Dev/Unity/ai_test && \
     UNITY_TEST_TIMEOUT=600 UNITY_BUILD_TIMEOUT=1800 UNITY_RUN_TIMEOUT=600 \
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
+      --model "${UNITY_OPS_MODEL:-sonnet}" \
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
       -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!
