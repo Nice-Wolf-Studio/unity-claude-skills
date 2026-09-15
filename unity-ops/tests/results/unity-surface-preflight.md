@@ -272,6 +272,12 @@ widening `run_scenario.sh`'s `ALLOW` array. The reachable fixes are (a) a `PreTo
 evaluates read-only `unity` probes and approves them, (b) adopting unrestricted `Bash` as the standard envelope for
 **all** reps including baselines so measurements stay comparable, or (c) pre-declaring `"$PWD"` denials on read-only
 probes as an environment property that does not make a rep INCONCLUSIVE. Tracked as issue #28.
+**Resolved by T2.4b: fix (a) was implemented** — `run_scenario.sh` now writes a settings file and passes
+`--settings <it>`, registering the harness-only `PreToolUse` hook `../permission-hook.sh`, which admits the
+same read-only set expansion-tolerantly and never returns `deny`. The `ALLOW` array and `UNITY_OPS_ALLOW` are
+unchanged, so the admitted **set** is unchanged. Envelope parity is restored from Increment 3 onward; the two
+`-allow` reps in this file remain the documented exception and are not re-run. Evidence:
+`../transcripts/permission-hook-probe-*.json`, DESIGN.md delta D15, `../README.md` §The permission hook.
 
 **Committed evidence for the two decisive rows (added in review round 1).** The four-row table above was originally
 recorded with no committed artefact. Two of its rows were reproduced from `~/Dev/Unity/ai_test` after
@@ -279,10 +285,44 @@ recorded with no committed artefact. Two of its rows were reproduced from `~/Dev
 — they are permission probes, not scenarios — so neither wrote a hook record: `grep -c` for both session ids in
 `~/.local/state/unity-ops/decisions.jsonl` returns **0**.
 
-| Probe | `--allowedTools` | `permission_denials` | session_id | transcript |
-|---|---|---|---|---|
-| denied | `Bash(unity list*)` | **1** | `7902d1cb-99f6-4341-b6d6-a548d24fd01f` | `../transcripts/permission-probe-pwd-denied.json` |
-| allowed | `Bash` (unrestricted) | **0** | `869e4d07-5367-4177-9cbe-10b6fbc60397` | `../transcripts/permission-probe-pwd-allowed.json` |
+| Probe | command | `--allowedTools` | `permission_denials` | session_id | transcript |
+|---|---|---|---|---|---|
+| denied | `unity list --project-path "$PWD" …` | `Bash(unity list*)` | **1** | `7902d1cb-99f6-4341-b6d6-a548d24fd01f` | `../transcripts/permission-probe-pwd-denied.json` |
+| allowed | `unity list --project-path "$PWD" …` | `Bash` (unrestricted) | **0** | `869e4d07-5367-4177-9cbe-10b6fbc60397` | `../transcripts/permission-probe-pwd-allowed.json` |
+| **literal control** (T2.4b, review minor m1) | `unity list --project-path /Users/jeremymiranda/Dev/Unity/ai_test …` | `Bash(unity list*)` — the harness **default** rule, same as row 1 | **0** | `b46636ac-6e24-4d88-9179-647a4c7a93c2` | `../transcripts/permission-probe-literal-allowed.json` |
+
+**The third row is the reproduced discriminator.** Rows 1 and 3 differ in exactly one thing — `"$PWD"` versus the
+literal path it expands to — and run under the *same* rule, `Bash(unity list*)`. Row 1 is denied, row 3 ran (exit 6,
+`COMMAND_FAILED`, "No Pipeline instance found", the expected *command* result with the Editor closed). The original
+four-row table asserted this from a same-session observation; it is now a committed, separately dispatched probe, so
+the F1 classification below rests on evidence, not on recollection. Row 3 was captured 2026-09-14 under CLI 2.1.270,
+`--model sonnet`, and wrote no hook record (no `--plugin-dir`).
+
+**The literal `claude -p` invocation each committed probe ran under (review minor m2).** All three were dispatched
+from `~/Dev/Unity/ai_test` after `. "$HOME/.unity/env"`, with `--output-format json --verbose`, `--model sonnet`,
+`--permission-mode dontAsk`, `< /dev/null`, and **no** `--plugin-dir` — they are permission probes, not scenarios,
+so `run_scenario.sh` was deliberately not used and no `scenario.current` tag was written. **Rows 1 and 2's
+invocations are reconstructed** — T2.4 did not record its command lines, which is the gap m2 exists to close —
+and are consistent with what their transcripts show (`assistant` envelopes present, so `--verbose`; cwd
+`/Users/jeremymiranda/Dev/Unity/ai_test` in the `system/init` envelope; the denial text naming don't-ask mode).
+**Row 3's is the literal line that was run.**
+
+```
+# row 1 — denied
+claude -p --output-format json --verbose --model sonnet \
+  --permission-mode dontAsk --allowedTools "Bash(unity list*)" \
+  -- "<prompt: run exactly `unity list --project-path \"\$PWD\" --format json --no-pager`>" < /dev/null
+
+# row 2 — allowed
+claude -p --output-format json --verbose --model sonnet \
+  --permission-mode dontAsk --allowedTools "Bash" \
+  -- "<prompt: run exactly `unity list --project-path \"\$PWD\" --format json --no-pager`>" < /dev/null
+
+# row 3 — literal control (T2.4b)
+claude -p --output-format json --verbose --model sonnet \
+  --permission-mode dontAsk --allowedTools "Bash(unity list*)" \
+  -- "<prompt: run exactly `unity list --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json --no-pager`>" < /dev/null
+```
 
 The denied probe's single `permission_denials` entry is the command verbatim — tool `Bash`, command
 `unity list --project-path "$PWD" --format json --no-pager` — and its final text is *"Bash denied by permission
@@ -602,7 +642,7 @@ $ grep -c '^VERDICT_RED: __$\|^TRIGGERED: __$' "$F"          -> 0
 $ grep -c '^TRIGGERED: YES$' "$F"                          -> 4
 $ grep -ci 'pipeline list' "$F"                            -> 26
 $ grep -ci 'sandbox' "$F"                                  -> 22
-$ grep -ci 'list --project-path' "$F"                      -> 25
+$ grep -ci 'list --project-path' "$F"                      -> 31   # 25 before T2.4b's m1/m2 additions
 $ bash /tmp/unity-ops-check-testbed.sh; echo rc=$?
 ADDED (status lines absent from snapshot): 0
 REMOVED (snapshot status lines now gone): 0
@@ -614,6 +654,10 @@ VANISHED (snapshot-hashed file is gone): 0
 GATE: PASS
 rc=0
 ```
+
+**Re-measured after T2.4b's m1/m2 additions (2026-09-14).** The `list --project-path` count moved 25 → 31 because
+the committed-evidence block above gained the literal-control row and the three reconstructed invocations; the other
+five counts are unchanged. Same self-counting property as the correction below: this file contains its own queries.
 
 **Correction — the first submission's recorded counts do not reproduce (M3).** They were written as `19 / 17 / 19`
 for the three keyword greps. Measured against the file as committed they were **20 / 18 / 20**; the independent
@@ -656,7 +700,7 @@ task's Expected block" is withdrawn** — it invited precisely the reading G21 e
 `unity-ops/PLAN.md:3657-3658` Expected says `^TRIGGERED: YES$` "prints `1` if the natural run selected the skill",
 but `unity-ops/PLAN.md:3638-3639` (Step 3) requires the **force-fed** run's counts to be **≥ 1** and
 `scenario-protocol.md:26-29` requires the four lines on **every rep** — so a correctly filled file can never print
-`1`. Filed as issue #32 on `Nice-Wolf-Studio/unity-claude-skills`.
+`1`. Filed as issue #32 on `Nice-Wolf-Studio/unity-claude-skills`. **Until #32 lands, `scenario-protocol.md:26` — four graded lines per *rep* — outranks `PLAN.md:3657`'s Expected of `1`, and this file is filled to the protocol: `^TRIGGERED: YES$` counting 4 over four reps is correct, and a count of `1` here would mean reps were left ungraded.**
 
 The three keyword counts come from the runs' own quoted commands and reasoning, never from the brief (G21): the
 brief lives at `../briefs/unity-surface-preflight.md` and is not pasted into this file.
