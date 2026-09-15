@@ -66,7 +66,9 @@ rm -f "${T%.json}.session"      # never leave a previous run's id beside a new t
 # --- 3b. [T2.2 finding] Three things a terminal-launched session has that a bare spawn lacks:
 #   (a) `unity` on PATH — ~/.zshrc:46 sources ~/.unity/env, so the child sources it too; without it every
 #       rep printed `unity: command not found` (127) instead of STATUS_NO_INSTANCES and the baseline was void;
-#   (b) `Bash(git rev-parse*)` — an observed read-only probe the plan's list did not carry;
+#   (b) `Bash(git rev-parse*)` — an observed read-only probe the plan's list did not carry; and the `git -C <path>`
+#       spellings of the three read-only git rules, because a prefix rule does not match `git -C p status` and one
+#       unrelated denial made a baseline rep conclude Bash was blocked entirely;
 #   (c) a Read deny on ~/.claude/plans/** — a baseline rep followed the hook advisory into the user-level
 #       plan file for THIS plugin, which contaminates every result run.
 # --- 4. Dispatch, IN THE BACKGROUND, then block in `wait`. Explicit permission envelope so a
@@ -87,7 +89,8 @@ else
          "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
          "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
          "Bash(unity command*)" "Bash(unity pipeline list*)" "Bash(unity test*)" \
-         "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)" "Bash(git rev-parse*)")
+         "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)" "Bash(git rev-parse*)" \
+         "Bash(git -C * status*)" "Bash(git -C * diff*)" "Bash(git -C * rev-parse*)")
 fi
 FMT="${UNITY_OPS_FORMAT:-json}"
 # Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
