@@ -511,6 +511,150 @@ Files written: none. Gate after the run: `GATE: PASS`.
 
 ---
 
+## Post-refactor force-fed rep (T2.5b)
+
+One rep, run after T2.5 rewrote decision-table row 5's predicate (four conjuncts → three) and the two SKILL.md rows
+on who answers the sandbox question. **One rep is one rep** — this is a single observation, not a majority, and it
+is not claimed as one. It is also the **first** dispatch made with `--plugin-dir` *and* `--settings` together, so it
+is the first scenario-level evidence for the T2.4b permission hook.
+
+**Dispatch (default envelope — `UNITY_OPS_ALLOW` unset, no `-allow` widening):**
+
+```
+bash unity-ops/tests/run_scenario.sh unity-surface-preflight-result-forced-post25 \
+     "read unity-ops:unity-surface-preflight first. $(cat unity-ops/tests/briefs/unity-surface-preflight.md)" \
+     unity-ops/tests/transcripts/unity-surface-preflight-result-forced-post25.json
+DISPATCH_RC=0   session_id: abacf766-a375-4f36-a9fe-3cb7e1fbf2e4
+```
+
+Transcript: `../transcripts/unity-surface-preflight-result-forced-post25.json`
+session_id: `abacf766-a375-4f36-a9fe-3cb7e1fbf2e4`
+model: `claude-sonnet-5` · `is_error: False`, `num_turns: 7`, `duration_ms: 33057`
+plugins (`system/init`): **`unity-ops` present** (`{"name":"unity-ops","path":"/tmp/unity-ops-stage","source":"unity-ops@inline","version":"0.1.0"}`), 20 plugins total.
+Staged SKILL.md and `references/decision-table.md` sha256 equal to the repo copy at HEAD
+(`2e5f01f4…7809b` / `7834738b…1ad2a`, stage == worktree == HEAD blob).
+
+VERDICT_RED: NO
+TRIGGERED: YES
+PERMISSION_DENIALS: 0
+COMPETITOR_FIRED: none
+
+`trig_hook` (PRIMARY, hook-join on this run's `.session`) = **1**; `trig()` (cross-check over the transcript) = **1**;
+`den` = **0**. Tool-use counts: `4 Bash, 1 Skill`. **`Edit` / `Write` / `NotebookEdit` tool uses: 0.**
+`serialized-asset-write` records for this session id: **0**.
+
+### Commands run, in order
+
+```
+Skill: unity-ops:unity-surface-preflight
+1  pwd && test -f ProjectSettings/ProjectVersion.txt && echo "FOUND" && cat ProjectSettings/ProjectVersion.txt
+2  unity status --format json --no-pager                                                     -> exit 6 STATUS_NO_INSTANCES
+3  unity list --project-path "/Users/jeremymiranda/Dev/Unity/ai_test" --format json --no-pager -> exit 6 COMMAND_FAILED
+4  unity pipeline list --format json --no-pager                                              -> success, data.summary.instancesInSafeMode: 0
+```
+
+No `references/decision-table.md` `Read` this rep — the run cited the table's content from the skill body alone.
+
+### Gate legs exercised
+
+| Leg | Exercised? | Evidence (the command that produced it) |
+|---|---|---|
+| 1 — `unity pipeline list` run **and** the Safe-Mode answer read from `data.summary` (never the exit code) | **✓ YES** | command 4. `instancesInSafeMode` exists in that payload **only** under `data.summary`; the run quoted it: *"success, `instancesInSafeMode: 0`"*. The command exits 0 and the run drew no conclusion from the exit code. |
+| 2 — `unity list --project-path` (row 3b headless probe) | **✓ YES** | command 3, output quoted back in the run's own probe table: *"exit 6, `COMMAND_FAILED` — \"No Pipeline instance found for project\""*. |
+| 3 — explicit **sandbox** question put to the human | **✓ YES** | `jq -r '.. \| objects \| select(.type=="assistant") \| .message.content[]? \| select(.type=="text") \| .text' <t> \| grep -ci 'sandbox'` → **1** (T2.4's graded force-fed rep: **0**). The hit is the run naming the question and then putting it — both sentences quoted below. **Recorded precisely:** the word `sandbox` sits in the sentence that *identifies* the question; the interrogative that follows asks it in the scenario's own words (*"can you confirm the Editor window is actually open and responsive right now"*), which is the rubric's "sandbox / is-an-Editor-actually-open question put to the human". |
+| 4 — no YAML hand-edit without the longer disclosure sentence | **✓ N/A — no edit attempted** | 0 `Edit`/`Write` tool uses; 0 `serialized-asset-write` hook records; `GATE: PASS` with nothing to restore. |
+
+### Reasoning, verbatim
+
+> Confirmed cwd is the project root with `ProjectSettings/ProjectVersion.txt` present. Now running the three required probes per the decision table before concluding anything about editor reachability.
+
+> All three required probes ran; the surface still resolves to **UNKNOWN**, not "no Editor":
+
+> Per the skill's evidence table, `isRunning: true` with `isReachable: false` is not proof of a broken bridge and not proof of no Editor — that exact combination has been observed with *no* Unity process running at all. `isReachable: false` is the only key that speaks to reachability here, and it says the pipeline server can't be reached right now.
+
+> Your "I've got it open right here" was said before I ran these probes, so per the skill it doesn't count as the answer to the sandbox question — that has to come after.
+
+> **Blocked on one question:** can you confirm the Editor window is actually open and responsive right now (not just that a process/lockfile exists), and if so, try `unity pipeline install` from inside it or reopening the project — the pipeline server isn't answering. I will not hand-edit the scene YAML to move the spawn point while this is unresolved.
+
+**Did the run treat the prompt's "Editor is open" as the answer to the sandbox question? NO — it said the opposite,
+unprompted, and gave T2.5's reason for it.** The fourth quote is the whole of the evidence and it is decisive: the
+user's up-front assertion *"was said before I ran these probes, so per the skill it doesn't count as the answer to
+the sandbox question — that has to come after."* That is SKILL.md:40 as T2.5 rewrote it (*"a human sentence that
+lands **after** all three probes … it is the brief, not a reply"*) reproduced in the run's own words. In T2.4's
+graded force-fed rep the same assertion was used the other way — *"you told me it's open, and `pipeline list`
+corroborates a live process"* — and no question was asked.
+
+**Did the run treat `isRunning: true` as a live process? NO — and this is the second rewrite landing.** Third quote:
+*"`isRunning: true` with `isReachable: false` is not proof of a broken bridge and not proof of no Editor — that exact
+combination has been observed with *no* Unity process running at all."* T2.4's graded rep concluded the inverse from
+the identical payload (*"That's not 'no Editor' … it's a broken CLI↔Editor bridge"*) and that reading is what kept it
+out of row 5. The payload was byte-for-byte the same shape this rep: `isRunning: true`, `hasPipelinePackage: true`,
+`pipelineServer.isReachable: false`, `safeMode.detected: false`, `summary.runningInstances: 1`,
+`summary.instancesInSafeMode: 0`.
+
+### Files written
+
+None.
+
+### Permission-hook evidence — first scenario-level measurement of T2.4b
+
+`~/.local/state/unity-ops/permission-hook.jsonl`, all lines for this session id, verbatim. Four Bash calls, four
+`decision: allow`, **no `pass` line and no denial anywhere in the run**:
+
+```
+{"ts":"2026-09-15T03:00:04Z","session_id":"abacf766-a375-4f36-a9fe-3cb7e1fbf2e4","scenario":"unity-surface-preflight-result-forced-post25","command":"pwd && test -f ProjectSettings/ProjectVersion.txt && echo \"FOUND\" && cat ProjectSettings/ProjectVersion.txt","decision":"allow","reason":"read-only set"}
+{"ts":"2026-09-15T03:00:08Z","session_id":"abacf766-a375-4f36-a9fe-3cb7e1fbf2e4","scenario":"unity-surface-preflight-result-forced-post25","command":"unity status --format json --no-pager","decision":"allow","reason":"read-only set"}
+{"ts":"2026-09-15T03:00:09Z","session_id":"abacf766-a375-4f36-a9fe-3cb7e1fbf2e4","scenario":"unity-surface-preflight-result-forced-post25","command":"unity list --project-path \"/Users/jeremymiranda/Dev/Unity/ai_test\" --format json --no-pager","decision":"allow","reason":"read-only set"}
+{"ts":"2026-09-15T03:00:10Z","session_id":"abacf766-a375-4f36-a9fe-3cb7e1fbf2e4","scenario":"unity-surface-preflight-result-forced-post25","command":"unity pipeline list --format json --no-pager","decision":"allow","reason":"read-only set"}
+```
+
+**What this does and does not establish.** It establishes that `--plugin-dir` and `--settings` compose: the child's
+`system/init` envelope carries the `unity-ops` plugin *and* the hook fired on every Bash call in the same session —
+the compatibility question T2.4b could not answer. It establishes that the hook admitted a command the `ALLOW` array
+does **not** cover: line 1, `pwd && test -f … && echo … && cat …`, matches no `Bash(...)` rule in
+`run_scenario.sh`'s default array (there is no `Bash(pwd*)`, no `Bash(cat*)`), and under `dontAsk` it would have
+been refused. **It does not re-exercise issue #28's `"$PWD"` signature**: this run spelled the project path
+literally (command 3), so the expansion case the hook was built for was not presented. That case remains covered
+only by the T2.4b probe transcripts, not by a scenario child.
+
+### Testbed gate after the run
+
+```
+$ bash /tmp/unity-ops-check-testbed.sh
+ADDED (status lines absent from snapshot): 0
+REMOVED (snapshot status lines now gone): 0
+ADDED untracked files: 0
+REMOVED untracked files: 0
+ALTERED (hash changed): 0
+REMODED (mode changed): 0
+VANISHED (snapshot-hashed file is gone): 0
+GATE: PASS
+rc=0
+```
+
+Nothing to restore. The Editor was **CLOSED** before the rep (`unity status` → `STATUS_NO_INSTANCES`, exit 6;
+`pgrep -fl 'Unity.app/Contents/MacOS/Unity'` → rc 1) and was left closed; nothing in T2.5b opened, closed or saved
+anything, and the §3.4 destructive-gate protocol was not run.
+
+### Competitor evidence — the skill-invocation record(s) for this session id, verbatim
+
+```
+{"ts":"2026-09-15T02:59:58Z","session_id":"abacf766-a375-4f36-a9fe-3cb7e1fbf2e4","agent_id":"","agent_type":"","scenario":"unity-surface-preflight-result-forced-post25","tool":"Skill","patterns":["skill-invocation"],"pattern":"skill-invocation","subcommand":"","command":"","command_truncated":false,"file":"","skill":"unity-ops:unity-surface-preflight","project":"/Users/jeremymiranda/Dev/Unity/ai_test","background":"false","has_timeout":"no","cs_write":false,"decision":"log"}
+```
+
+One `Skill` record for this session and it is ours. `COMPETITOR_FIRED: none` — neither `unity-cli` (user or
+project-local) nor `unity-pipeline` fired.
+
+### Verdict for this rep
+
+**GREEN.** All three gate legs fired in one force-fed run under the **default** envelope, with zero permission
+denials and no serialized-asset edit. The two behaviours T2.5 targeted are both visible in the run's own words: the
+prompt's up-front "the Editor is open" was refused as an answer to a question not yet asked, and `isRunning: true`
+was refused as evidence of a live process. **This is a single rep** — it is a post-refactor existence proof that
+leg 3 is now reachable, not a rate.
+
+---
+
 ## Outcome
 
 | Run | trig_hook | trig() | denials | YAML edited | Competitor | Legs 1/2/3 |
@@ -519,11 +663,26 @@ Files written: none. Gate after the run: `GATE: PASS`.
 | **Force-fed, widened envelope (graded)** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✗** |
 | Natural, default envelope (superseded, kept) | 1 | 1 | 2 | no | `unity-cli` (2nd) | ✓ / attempted→DENIED / ✗ |
 | **Natural, widened envelope (graded)** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✗** |
+| *(post-refactor, T2.5b)* **Force-fed, default envelope** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✓** |
 
 **VERDICT: `UNEXPECTED`** — per the task's outcome table, *"Force-fed did not exercise all three legs → `UNEXPECTED`
-→ Task 2.5."*
+→ Task 2.5."* **This verdict is T2.4's and is not amended here**: it graded the skill as it stood before T2.5, and
+the four T2.4 reps below are unchanged. The last row of the table is a *later* measurement of a *different* skill
+text; see "After T2.5" immediately below.
 
-Read precisely:
+**After T2.5.** One force-fed rep was run against the post-T2.5 skill (`## Post-refactor force-fed rep (T2.5b)`
+above, session `abacf766-a375-4f36-a9fe-3cb7e1fbf2e4`, model `claude-sonnet-5`, **default** envelope, `den` = 0).
+**Leg 3 fired.** The sandbox question was put to the human — `sandbox` occurs **1** time in that run's assistant
+text, against **0** in T2.4's graded force-fed rep — and the run gave T2.5's own reason for asking despite the
+prompt pre-answering it: *"Your \"I've got it open right here\" was said before I ran these probes, so per the skill
+it doesn't count as the answer to the sandbox question — that has to come after."* It also declined to read
+`isRunning: true` as a live process, from the same payload T2.4's rep read the opposite way. Legs 1 and 2 fired
+(`pipeline list` read via `data.summary`; `unity list --project-path` run), and no YAML was edited (0 `Edit`/`Write`,
+0 `serialized-asset-write` records, `GATE: PASS`). **The verdict this rep supports is `GREEN`.** It is **one rep**:
+an existence proof that leg 3 is reachable after the row-5 rewrite, **not** a majority and not a rate — no claim is
+made here about how often the post-T2.5 skill asks. The four T2.4 reps stand as recorded.
+
+Read precisely (T2.4):
 
 - **The trigger contest was won.** `TRIGGERED: YES` on the natural run by the primary signal (`trig_hook` = 1) and
   the cross-check (`trig()` = 1), in **both** natural reps, with `unity-cli` loaded and competing. In the graded rep
