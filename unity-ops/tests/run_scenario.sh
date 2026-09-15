@@ -93,6 +93,34 @@ else
          "Bash(git -C * status*)" "Bash(git -C * diff*)" "Bash(git -C * rev-parse*)")
 fi
 FMT="${UNITY_OPS_FORMAT:-json}"
+# --- 4a. [T2.4b] [#28] The rules above match the LITERAL, PRE-EXPANSION command string, so
+#     `unity list --project-path "$PWD" …` matches NONE of them — not `Bash(unity list*)`, not
+#     `Bash(unity *)`, not even a rule that literally spells the `"$PWD"` (T2.4 probe table,
+#     results/unity-surface-preflight.md). The skill under test teaches `--arg p "$PWD"`, so every
+#     rep would take that denial and be graded INCONCLUSIVE. A harness-only PreToolUse hook,
+#     delivered through `--settings`, re-implements the SAME read-only set post-expansion-tolerantly
+#     and returns `permissionDecision: allow` for it. It never returns `deny`, so it can only admit
+#     what `dontAsk` would otherwise refuse — the ALLOW array above and UNITY_OPS_ALLOW are
+#     untouched, and the hook is never staged into the plugin (stage.sh copies no `tests/` file).
+HOOK_SH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/permission-hook.sh"
+SETTINGS=""
+if [ -f "$HOOK_SH" ]; then
+  _S="$ST/harness-settings.json"
+  if python3 - "$HOOK_SH" "$_S" <<'PY'
+import json, sys
+hook, out = sys.argv[1], sys.argv[2]
+# The repo path contains a space; json.dumps gives a double-quoted shell word, and the path holds
+# no $, backtick or backslash, so double quotes are the correct and sufficient shell quoting.
+cfg = {"hooks": {"PreToolUse": [{"matcher": "Bash",
+        "hooks": [{"type": "command", "command": "bash " + json.dumps(hook)}]}]}}
+with open(out, "w") as f:
+    f.write(json.dumps(cfg, indent=2) + "\n")
+PY
+  then SETTINGS="$_S"
+  else echo "run_scenario: could not write $_S; dispatching without the permission hook" >&2; fi
+else
+  echo "run_scenario: $HOOK_SH is missing; dispatching without the permission hook" >&2
+fi
 # Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
 # a skill that holds Sonnet under pressure holds Opus. Verified: `claude -p --model sonnet` accepted on 2.1.270.
 if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
@@ -106,6 +134,7 @@ else
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
       --model "${UNITY_OPS_MODEL:-sonnet}" \
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
+      ${SETTINGS:+--settings "$SETTINGS"} \
       --disallowedTools "Read(//Users/jeremymiranda/.claude/plans/**)" \
       -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!

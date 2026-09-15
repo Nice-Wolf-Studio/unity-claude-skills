@@ -12,7 +12,9 @@ as **headless `claude -p` sessions against a staged plugin root**.
 
 `run_scenario.sh` is the ONLY dispatcher. It takes a `mkdir` lock, asserts the scenario flag is
 absent, re-checks `claude auth status`, writes the tag, dispatches with an explicit
-`--permission-mode dontAsk --allowedTools …` envelope, and captures the child's own `session_id`
+`--permission-mode dontAsk --allowedTools …` envelope **plus `--settings <harness-settings.json>`,
+which registers the expansion-tolerant permission hook described in the next section** [T2.4b], and
+captures the child's own `session_id`
 to `transcripts/<tag>.session`. The dispatch runs in the **background** and the script blocks in
 `wait` — bash defers a trap while blocked on a *foreground* child, so a foreground `claude -p`
 made the trap useless for the whole life of the run. A `trap … EXIT INT TERM HUP` kills the child
@@ -27,6 +29,68 @@ object, with no assistant messages and therefore no tool-use blocks. `< /dev/nul
 the CLI waits 3 s for stdin. Gate success on `is_error` / `terminal_reason`, never on `subtype`.
 If `transcripts/shape-probe.json` shows no `assistant` envelopes, set `UNITY_OPS_FORMAT=stream-json`
 and the parsers read NDJSON instead — both `trig()` and the session-id extractor accept either.
+
+## The permission hook — why `--allowedTools` alone is not the envelope  [T2.4b] [#28]
+
+Under `--permission-mode dontAsk` a `Bash(prefix*)` rule matches the **literal, pre-expansion**
+command string. A command carrying a shell expansion has no statically-known effective command, so
+the matcher declines rather than approve on the pre-expansion text. `unity list --project-path
+"$PWD" …` therefore matches **no** rule — not `Bash(unity list*)`, not `Bash(unity *)`, and not even
+a rule that literally spells `Bash(unity list --project-path "$PWD"*)`. T2.4 established that with
+committed probes (`results/unity-surface-preflight.md`, issue #28). Because `unity-surface-preflight`
+itself teaches `--arg p "$PWD"`, every rep would take that denial and be graded `INCONCLUSIVE`.
+
+`run_scenario.sh` therefore writes
+`${XDG_STATE_HOME:-$HOME/.local/state}/unity-ops/harness-settings.json` at dispatch time and passes
+`--settings <that file>`. The settings register **one** `PreToolUse` hook on `Bash`:
+`tests/permission-hook.sh`, which re-implements the **same** read-only set post-expansion-tolerantly
+and returns `{"hookSpecificOutput":{…,"permissionDecision":"allow"}}` for it.
+
+What it is and is not:
+
+- **It never returns `deny`.** It can only *admit*; under `dontAsk` the default already denies, so a
+  bug in the hook fails closed (denied), never open.
+- **It changes the matching mechanism, not the admitted set.** `ALLOW` and `UNITY_OPS_ALLOW` are
+  untouched. Every entry in the hook's set has a counterpart in `ALLOW`, plus the pure text filters
+  (`jq`, `grep`, `head`, `wc`, `sed -n`, …) a probe uses on its **own** output. Adding to the set
+  widens the envelope and needs the same scrutiny as adding a `Bash(...)` rule.
+- **It is harness-only and is never staged.** `stage.sh` copies `.claude-plugin/`, `hooks/` and the
+  named `skills/<name>/` directories and nothing else; no `tests/` file reaches
+  `/tmp/unity-ops-stage`, so no plugin consumer ever gets this hook.  [G18] [G20]
+- **Refused outright, whatever the rest of the command says:** command substitution (`$(…)`, backticks)
+  anywhere in the string, any `>`/`>>`/`<` redirection other than to `/dev/null` or an `fd` dup
+  (`2>&1`), heredocs, `(`/`)` grouping, and any segment whose command word is outside the set. Every
+  segment of a `;`/`&&`/`||`/`|`/newline chain must pass; one bad segment refuses the whole command.
+- **Limits.** `#` is not treated as a comment (a comment could otherwise hide a second line from the
+  hook that bash still runs), so a genuine inline comment refuses the command. `sed` needs `-n` and
+  refuses `-i`; `awk` refuses any program text containing `>`, `|` or `system(`; `find` refuses
+  `-delete`/`-exec`-family primaries. A command over 64 KB is refused unread.
+
+Log: one JSONL line per Bash call in
+`${XDG_STATE_HOME:-$HOME/.local/state}/unity-ops/permission-hook.jsonl` —
+`{"ts","session_id","scenario","command","decision":"allow"|"pass","reason"}`. `scenario` comes from
+the same `scenario.current` flag file the guard reads, so a scenario's admissions are attributable;
+a probe run outside `run_scenario.sh` logs an empty `scenario`.
+
+### Acceptance probes (T2.4b, 2026-09-14, CLI 2.1.270, `--model sonnet`)
+
+Each is a one-shot `claude -p` from `~/Dev/Unity/ai_test` after `. "$HOME/.unity/env"` — **not** a
+scenario: no `--plugin-dir`, no `run_scenario.sh`, so none wrote a guard record.
+
+| # | Command sent | Envelope | Expected | Observed `permission_denials` | Transcript |
+|---|---|---|---|---|---|
+| 1 | `unity list --project-path "$PWD" --format json --no-pager` | default `ALLOW` + `--settings` | 0, and it runs | **0** (ran; exit 6 `COMMAND_FAILED`, Editor closed) | `transcripts/permission-hook-probe-1.json` |
+| 2 | `unity pipeline list --format json --no-pager \| jq '.data.summary'` | default `ALLOW` + `--settings` | 0 | **0** (ran; exit 0) | `transcripts/permission-hook-probe-2.json` |
+| 3 | `unity close` | default `ALLOW` + `--settings` | ≥ 1, never runs | **1**, no `tool_result` running it | `transcripts/permission-hook-probe-3.json` |
+| 4 | `unity list --project-path "$PWD" --format json > /tmp/unity-ops-probe-leak.txt` | default `ALLOW` + `--settings` | ≥ 1 | **1**; `test ! -e /tmp/unity-ops-probe-leak.txt` passes | `transcripts/permission-hook-probe-4.json` |
+| 5 | `echo "$(rm -rf /tmp/unity-ops-probe-never)"` | default `ALLOW` + `--settings` | ≥ 1 | **0** — the model refused *before* issuing any Bash call, so nothing reached the permission layer. The command did not run and the path does not exist. See 5b. | `transcripts/permission-hook-probe-5.json` |
+| 5b | `echo "$(pwd)"` | default `ALLOW` + `--settings` | ≥ 1 | **1** — the same `$(` rejection path, exercised through the real permission stack with a command the model will actually issue | `transcripts/permission-hook-probe-5b.json` |
+| 6 | `git -C "$PWD" status --porcelain` | default `ALLOW` + `--settings` | 0 | **0** (ran; exit 0, 45 lines) | `transcripts/permission-hook-probe-6.json` |
+
+After the set: `bash /tmp/unity-ops-check-testbed.sh` → `GATE: PASS`; `unity status --format json`
+→ `STATUS_NO_INSTANCES` (exit 6); `decisions.jsonl` unchanged at 40 lines;
+`permission-hook.jsonl` gained exactly 7 lines — one per Bash call the probes issued (probe 5 issued
+none), four `allow` and three `pass`.
 
 ## Before any LIVE run — the precondition
 
@@ -125,6 +189,8 @@ it. Used where a real run would discard work or take an hour. |
 - `results/` — GREEN evidence, captured after. Re-run and overwrite when a skill is revised.
 - `metrics.md` — how each DX metric is computed from the hook's JSONL log.
 - `stage.sh`, `run_scenario.sh`, `restatement-audit.sh` — the three scripts every increment calls.
+- `permission-hook.sh` — the harness-only `PreToolUse` permission hook `run_scenario.sh` passes via
+  `--settings`. **Never staged into the plugin.**  [T2.4b]
 - `transcripts/<tag>.session` — the child session's own id. The primary metric filter.
 - `transcripts/shape-probe.json` — the observed envelope shape every parser is asserted against.
 - `testbed-snapshot.md`, `pipeline-list-shape.md` — increment-0 observations every later task depends on.
