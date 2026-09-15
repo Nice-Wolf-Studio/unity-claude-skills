@@ -120,17 +120,40 @@ What it is and is not:
     `--proxy <url>` sends the run's traffic through an arbitrary proxy, and `--log-proxy` writes
     `proxy-request.json` into the project — neither belongs in a read-only set, so neither is admitted
     (`--proxy-disable`, `--no-log-proxy` and `-V` are refused too, simply because they are not on the
-    admit list). Live probe: `permission-hook-probe-vcs-affected.json`, `permission_denials: []`,
-    exit 0. `run_scenario.sh`'s `ALLOW` array is unchanged by this addition — `unity vcs affected` is
+    admit list). Live probe: `permission-hook-probe-vcs-affected.json`, session
+    `e689650a-699c-4ee6-90b1-3c7e876e8d02`, `permission_denials: []`, exit 0, `"success": true`. `run_scenario.sh`'s `ALLOW` array is unchanged by this addition — `unity vcs affected` is
     admitted only through this hook, exactly like the `"$PWD"`-expansion case the hook was built for.
-  - **`--help`/`-h` must be the last token and nothing may follow it** — the accepted forms are
-    exactly `unity --help`, `unity -h`, `unity --version`, `unity <sub> --help` and
-    `unity <sub> <sub2> --help`. `unity skill --help install /x` and `unity --help close` are refused
-    (R2-4), and `ALLOW`'s `Bash(unity * --help)` has no trailing `*` either.
+  - **`--help`/`-h` must be the last token, and the words before it must name an ADMITTED prefix.**
+    The accepted forms are exactly `unity --help`, `unity -h`, `unity --version`,
+    `unity <sub> --help` for a `<sub>` in the read-only set, and `unity <sub> <sub2> --help` only
+    where `<sub> <sub2>` is itself admitted — `vcs affected`, `command <one of the five>`,
+    `pipeline list`, `skill install`. `unity skill --help install /x` and `unity --help close` are
+    refused (R2-4); so are `unity vcs commit --help`, `unity vcs push --help`,
+    `unity command save_all --help` and `unity pipeline install --help` (F4-1). That rule used to sit
+    *above* the subcommand dispatch and returned before the set was consulted, so it admitted
+    `--help` on **mutating** verbs on the strength of an assumption nobody has verified: that this
+    CLI's `--help` short-circuits execution. `unity close --help` is refused, because `close` is not
+    in the hook's set — `ALLOW`'s `Bash(unity * --help)` still admits its literal spelling by the
+    `--allowedTools` route.
+  - **`unity test --help` and `unity build --help` are the one help-only exception.** Executing
+    either is not read-only (a junit report, a build output) and both still `pass`, but their *help
+    screens* are, and `unity test --help | grep -i affected` is the `unity-cli-contract` scenario's
+    primary qualifying probe — so the depth-2 `--help` form accepts `test` and `build` on top of the
+    read-only set. `unity test`, `unity build` and `unity test --affected` remain refused.  [T3.1]
   - **Everything after the subcommand is an option whitelist** (R2-5): `--project-path <value>`,
     `--format json` (no other value), `--no-pager`, `--timeout <digits>`, and `--verbose` for
     `unity status` / `unity list` / `unity pipeline list` but not after a `unity command` editor
     command. `unity command editor_status extra` and `unity status --format yaml` are refused.
+    **Both spellings are accepted** — `--format json` and `--format=json`, `--timeout 5000` and
+    `--timeout=5000`, `--project-path <p>` and `--project-path=<p>`, `--since HEAD~1` and
+    `--since=HEAD~1` — with identical value validation, because the CLI's own `--help` output may
+    teach either and refusing one re-creates the INCONCLUSIVE grading this hook exists to prevent
+    (F4-3). `--format=tsv`, `--timeout=abc` and `--since=` are still refused.
+  - **A path value must be one path to bash as well as one token to the hook** (F4-2): the positional
+    of `unity vcs affected` and every `--project-path` value are refused if they contain a glob
+    metacharacter (`*`, `?`, `[`) or a `..` segment. `unity vcs affected *` is one token here and
+    many words after expansion — and a file named `--log-proxy`, which the child can author with the
+    unrestricted `Write` tool, would then arrive as an *option*, past this whitelist.
   - `jq` short options are checked **per character**, so a cluster cannot smuggle a file read:
     `jq -nf /tmp/x` and `jq -L /tmp 'include …'` are refused alongside `-f`, `--from-file`,
     `--rawfile`, `--slurpfile`, `--library-path` and `--run-tests` (R2-3).
@@ -148,13 +171,28 @@ Log: one JSONL line per Bash call in
 the same `scenario.current` flag file the guard reads, so a scenario's admissions are attributable;
 a probe run outside `run_scenario.sh` logs an empty `scenario`.
 
+**Every line count this file quotes counts PROBE traffic only.** The same log also accumulates
+by-hand spot-checks run straight against the hook, which carry a made-up `session_id`
+(`manual-test`, `t31probe`, `r4check`, …) instead of a CLI session UUID. Nothing is deleted — the log
+is append-only — so filter when you count:
+
+    jq -r 'select(.session_id | test("^[0-9a-f]{8}-[0-9a-f]{4}-")) | .decision' \
+      ~/.local/state/unity-ops/permission-hook.jsonl | sort | uniq -c
+
+Anything the filter drops was hand-driven, not a probe. When hand-probing, put
+`export XDG_STATE_HOME=$(mktemp -d)` in the shell first — that is what
+`permission-hook-test.sh` does, and it keeps the accounting clean (F4-4).
+
 ### Acceptance probes (T2.4b, 2026-09-14, CLI 2.1.270, `--model sonnet`)
 
 **Re-captured against the fixed hook** after the round-1 review; the superseded transcripts were
 replaced rather than kept, so the committed evidence corresponds to the committed code. Rows **1, 2
-and 6 were re-captured a second time** after the round-2 narrowing (R2-1…R2-5): a narrowing can only
-break the positive path, so only the three rows that must stay at 0 were re-run — 3, 4, 5, 5b and m1
-are unchanged from the round-1 re-capture and their transcripts are untouched.
+and 6 were re-captured a second time** after the round-2 narrowing (R2-1…R2-5), and **row 1 and the
+`unity vcs affected` probe a third time** after the round-4 narrowing (F4-1…F4-3): a narrowing can
+only break the positive path, so each round re-runs only the rows that must stay at 0. Rows 3, 4, 5,
+5b and m1 are unchanged from the round-1 re-capture and their transcripts are untouched. The hook
+file's mtime is recorded either side of every re-capture, so "the tested bytes are the committed
+bytes" is checkable from the report and not only from the commit order.
 
 Each is a one-shot `claude -p` from `~/Dev/Unity/ai_test` after `. "$HOME/.unity/env"` — **not** a
 scenario: no `--plugin-dir`, no `run_scenario.sh`, so none wrote a guard record. Envelope: the
@@ -174,9 +212,18 @@ are under `transcripts/`. The literal invocation, with `${ALLOW[@]}` the array a
 
 Row m1 is the one exception: `--allowedTools "Bash(unity list*)"` and **no** `--settings`.
 
+Two probes sit outside the numbered table, same form, same envelope:
+`permission-hook-probe-vcs-affected.json` (`unity vcs affected --format json --no-pager`, session
+`e689650a-699c-4ee6-90b1-3c7e876e8d02`, **0** denials, exit 0) and
+`permission-hook-probe-test-help.json` (`unity test --help | grep -ci affected`, session
+`9690ad0f-8ddc-43a0-8610-45130f59af5c`, **0** denials, exit 0, output `0`) — the second is the
+`unity-cli-contract` scenario's primary qualifying probe in its piped form, and it confirms that the
+help-only exception above admits both segments. Its output being `0` is a *command* result about
+what `unity test --help` prints, not a permission result.
+
 | # | Command sent | Expected | Observed `permission_denials` | session_id | Transcript |
 |---|---|---|---|---|---|
-| 1 | `unity list --project-path "$PWD" --format json --no-pager` | 0, **and it runs** | **0** — ran; exit 6 `COMMAND_FAILED` ("No Pipeline instance found"), the expected *command* result with the Editor closed | `2b11d0a5-797b-47eb-b568-ed91068ece21` | `permission-hook-probe-1.json` |
+| 1 | `unity list --project-path "$PWD" --format json --no-pager` | 0, **and it runs** | **0** — ran; exit 6 `COMMAND_FAILED` ("No Pipeline instance found"), the expected *command* result with the Editor closed. The model prefixed `pwd && `; both segments are in the set, so the chain was admitted as one command | `aa717d67-da59-4594-a617-9ee98ac37d85` | `permission-hook-probe-1.json` |
 | 2 | `unity pipeline list --format json --no-pager \| jq '.data.summary'` | 0 | **0** — ran; exit 0, the six summary counters returned | `1cc85a55-424c-47b0-ba95-5c66d7f0e78c` | `permission-hook-probe-2.json` |
 | 3 | `unity close` | ≥ 1, **never runs** | **1** — denied; the only `tool_result` is the don't-ask denial text (`is_error: true`), and `unity status` was still `STATUS_NO_INSTANCES` after the set | `6511005e-59c5-4949-b1ef-4331040ab974` | `permission-hook-probe-3.json` |
 | 4 | `unity list --project-path "$PWD" --format json > /tmp/unity-ops-probe-leak.txt` | ≥ 1 | **1** — denied on the redirection (the model appended `; echo "EXIT:$?"`, which the hook logged and refused just the same); `test ! -e /tmp/unity-ops-probe-leak.txt` passes | `de8d2211-a08e-4e7c-98eb-c0447ca616b5` | `permission-hook-probe-4.json` |

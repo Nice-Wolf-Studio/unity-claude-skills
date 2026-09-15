@@ -148,7 +148,57 @@ pass	cat <<< "x"
 pass	echo x >& /tmp/unity-ops-o
 pass	git -C /tmp -C /etc status
 pass	git -C
+# ---- ROUND-4 REVIEW (F4-1..F4-3) ----
+# F4-1 — the generic depth-2/3 `--help` rule sat above the subcommand dispatch
+pass	unity vcs commit --help
+pass	unity vcs revert --help
+pass	unity vcs push --help
+pass	unity vcs checkout --help
+pass	unity command save_all --help
+pass	unity pipeline install --help
+pass	unity status foo --help
+allow	unity pipeline list --help
+allow	unity skill install --help
+allow	unity test --help
+pass	unity vcs
+pass	unity vcs affected --json --help
+# F4-2 — a glob positional is one token to the hook and many words to bash
+pass	unity vcs affected *
+pass	unity vcs affected Assets/*
+pass	unity vcs affected Assets/?.cs
+pass	unity vcs affected ..
+pass	unity vcs affected ../Assets
+pass	unity list --project-path '../x'
+pass	unity list --project-path *
+pass	unity list --project-path=../x
+# F4-3 — glued spellings take the SAME value validation as the spaced ones
+pass	unity vcs affected --format=tsv
+pass	unity vcs affected --since=
+pass	unity vcs affected --since=-x
+pass	unity vcs affected --timeout=abc
+pass	unity list --format=yaml
+pass	unity list --timeout=abc
+# round-4 reviewer's other gap rows
+pass	unity vcs affected -V
+pass	unity vcs affected -- --log-proxy
+pass	UNITY vcs affected
+# T3.1 — `unity test`/`unity build` HELP is read-only; executing them is not
+pass	unity test
+pass	unity build
+pass	unity test --affected
+pass	unity test --affected --help
 # ---- the read-only set: these MUST be `allow` ----
+allow	unity test --help | grep -i affected
+allow	unity test --help | grep -ci affected
+allow	unity build --help
+
+allow	unity vcs --help
+allow	unity command editor_status --help
+allow	unity vcs affected --since=HEAD~1 --format=json
+allow	unity vcs affected --timeout=5000 --no-pager
+allow	unity list --project-path=/Users/jeremymiranda/Dev/Unity/ai_test --format=json
+allow	unity vcs affected Assets/Scripts --since HEAD~1 --format json
+
 allow	unity -h
 allow	unity --help
 allow	unity skill --help
@@ -173,7 +223,7 @@ allow	unity skill install --list
 allow	unity skill install --list --format json --no-pager
 allow	unity status --format json --no-pager
 allow	unity --version
-allow	unity close --help
+pass	unity close --help
 allow	unity list --project-path "$PWD" --format json 2>/dev/null
 allow	git rev-parse --show-toplevel
 allow	git log --oneline -5

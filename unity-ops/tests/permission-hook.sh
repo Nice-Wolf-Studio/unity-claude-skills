@@ -91,6 +91,18 @@ UNITY_SKILL_TAIL = {"--format", "json", "--no-pager"}   # the ONLY tokens allowe
 # proxy-request.json), `--proxy-disable`/`--no-log-proxy` (not in the admit list either), `-V`.
 UNITY_VCS_AFFECTED_FLAGS = {"--json", "--no-pager", "--no-banner", "--non-interactive", "--quiet",
                             "--verbose"}
+# The second words that make an ADMITTED prefix, for the depth-3 `unity <sub> <sub2> --help` form.
+# The review named `vcs` and `command`; `pipeline install --help` and `skill`/`status`/`list` are the
+# same shape (`pipeline install` is as mutating as `vcs commit`), so the rule is uniform rather than
+# a list of the two spellings that happened to be reported.  [round-4 review F4-1]
+UNITY_SUB2_OK = {"vcs": {"affected"}, "command": UNITY_COMMAND_RO,
+                 "pipeline": {"list"}, "skill": {"install"}}
+# `unity <sub> --help` prints a help screen; it does not run <sub>. `test` and `build` are NOT in the
+# read-only set -- executing either writes (a junit report, a build output) -- but their HELP is
+# read-only, and `unity test --help | grep -i affected` is the unity-cli-contract scenario's primary
+# qualifying probe. Help-only, therefore: `unity test` and `unity build` themselves still pass, and
+# ALLOW admits their literal spellings by the --allowedTools route.  [T3.1]
+UNITY_HELP_SUB = UNITY_SUB | {"test", "build"}
 GIT_SUB = {"status", "diff", "rev-parse", "log", "show"}
 # git options that make git run a program or write a file without any shell redirection:
 #   -c diff.external=… / --config-env  -> arbitrary program;  --exec-path, --git-dir, --work-tree
@@ -115,20 +127,54 @@ EXPORT_OK  = re.compile(r"^UNITY_[A-Z0-9_]+=[^$`]*$")     # UNITY_* names, LITER
 # the same chain shape as round-1 C2 (round-2 review R2-1). run_scenario.sh:132 sources exactly
 # `. "$HOME/.unity/env"`, which posix shlex hands us as `$HOME/.unity/env`.
 SOURCE_OK  = {"$HOME/.unity/env", "~/.unity/env", os.path.expanduser("~/.unity/env")}
+# A path VALUE the hook accepts must be one path to bash as well as one token to the hook. A glob
+# metacharacter makes it many words after expansion, and a file named like an option (`--log-proxy`)
+# then arrives as an OPTION, past the whitelist — the child can author such a file with the
+# unrestricted Write tool (round-4 review F4-2). `..` segments are refused with it: nothing read-only
+# in this harness needs to climb out of the directory it was pointed at.
+def path_ok(v):
+    if v == "":
+        return "empty path value"
+    for ch in "*?[":
+        if ch in v:
+            return "path with a glob metacharacter: " + v
+    if ".." in v.split("/"):
+        return "path with a .. segment: " + v
+    return ""
+
 # Read-only option tails (round-2 review R2-5). `--project-path`/`--timeout` take one value; `--format`
-# takes `json` only; everything else after the subcommand is refused.
+# takes `json` only; everything else after the subcommand is refused. Both the SPACED (`--format json`)
+# and the GLUED (`--format=json`) spellings are accepted, with identical value validation: the CLI's
+# own `--help` output may teach either, and refusing one of them re-creates the INCONCLUSIVE grading
+# this whole hook exists to prevent (round-4 review F4-3).
 def tail_ok(tokens, verbose_ok):
     i, n = 0, len(tokens)
     while i < n:
         t = tokens[i]
+        if t.startswith("--project-path="):
+            why = path_ok(t.split("=", 1)[1])
+            if why:
+                return "--project-path=: " + why
+            i += 1; continue
         if t == "--project-path":
             if i + 1 >= n:
                 return "--project-path without a value"
+            why = path_ok(tokens[i + 1])
+            if why:
+                return "--project-path: " + why
             i += 2; continue
+        if t.startswith("--format="):
+            if t != "--format=json":
+                return "--format with a value other than json"
+            i += 1; continue
         if t == "--format":
             if i + 1 >= n or tokens[i + 1] != "json":
                 return "--format with a value other than json"
             i += 2; continue
+        if t.startswith("--timeout="):
+            if not t.split("=", 1)[1].isdigit():
+                return "--timeout without a numeric value"
+            i += 1; continue
         if t == "--timeout":
             if i + 1 >= n or not tokens[i + 1].isdigit():
                 return "--timeout without a numeric value"
@@ -150,6 +196,11 @@ def vcs_affected_tail_ok(tokens):
         t = tokens[i]
         if t in ("--help", "-h"):
             return "unity vcs affected: --help/-h admitted only as the sole trailing token"
+        if t.startswith("--since="):              # glued spelling, same validation (F4-3)
+            val = t.split("=", 1)[1]
+            if val == "" or val.startswith("-"):
+                return "unity vcs affected: --since= with an empty or option-like value: " + t
+            i += 1; continue
         if t == "--since":
             if i + 1 >= n:
                 return "unity vcs affected: --since without a value"
@@ -157,10 +208,18 @@ def vcs_affected_tail_ok(tokens):
             if val.startswith("-"):
                 return "unity vcs affected: --since with a value that starts with -: " + val
             i += 2; continue
+        if t.startswith("--format="):
+            if t != "--format=json":
+                return "unity vcs affected: --format with a value other than json"
+            i += 1; continue
         if t == "--format":
             if i + 1 >= n or tokens[i + 1] != "json":
                 return "unity vcs affected: --format with a value other than json"
             i += 2; continue
+        if t.startswith("--timeout="):
+            if not t.split("=", 1)[1].isdigit():
+                return "unity vcs affected: --timeout without a numeric value"
+            i += 1; continue
         if t == "--timeout":
             if i + 1 >= n or not tokens[i + 1].isdigit():
                 return "unity vcs affected: --timeout without a numeric value"
@@ -171,6 +230,9 @@ def vcs_affected_tail_ok(tokens):
             return "unity vcs affected: argument outside the read-only option whitelist: " + t
         if took_positional:
             return "unity vcs affected: more than one positional argument: " + t
+        why = path_ok(t)                          # one token here must be one path to bash too (F4-2)
+        if why:
+            return "unity vcs affected: " + why
         took_positional = True
         i += 1
     return ""
@@ -200,10 +262,19 @@ def words_ok(words):
         # `--help` must be the LAST token and nothing may follow it: `if "--help" in rest` admitted
         # `unity skill --help install /x` and `unity --help close` (round-2 review R2-4). ALLOW's rule
         # `Bash(unity * --help)` has no trailing `*`, so it too matches only commands ENDING in --help.
+        # The depth-2/3 form must name an ADMITTED prefix. `len(rest) in (2,3) and rest[-1]=="--help"`
+        # sat ABOVE the subcommand dispatch and returned before `s1 not in UNITY_SUB` was ever
+        # evaluated, so it admitted `unity vcs commit --help`, `unity vcs push --help` and
+        # `unity command save_all --help` — mutating verbs, on the standing (still unverified)
+        # assumption that `--help` short-circuits execution in this CLI (round-4 review F4-1).
+        # `rest[0] in UNITY_SUB` alone is NOT sufficient: `vcs` and `command` are both in it.
         if rest in (["--help"], ["-h"], ["--version"]):
             return ""
-        if len(rest) in (2, 3) and rest[-1] == "--help":
-            return ""                           # `unity <sub> [<sub2>] --help`
+        if len(rest) == 2 and rest[-1] == "--help" and rest[0] in UNITY_HELP_SUB:
+            return ""                           # `unity <admitted-sub|test|build> --help`
+        if (len(rest) == 3 and rest[-1] == "--help"
+                and rest[1] in UNITY_SUB2_OK.get(rest[0], frozenset())):
+            return ""                           # `unity <admitted-sub> <admitted-sub2> --help`
         if not rest:
             return ""                           # bare `unity` prints its own help
         s1 = rest[0]
