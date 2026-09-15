@@ -1,5 +1,25 @@
 # Baseline — unity-surface-preflight (no skill, 3 reps)
 
+> **INVALID — DO NOT USE AS EVIDENCE. Superseded by `unity-surface-preflight.md` (re-run, unity on PATH).**
+>
+> Every rep in this file probed the CLI in a child session that had **no `unity` on PATH**: each
+> `unity status --format json` returned `(eval):1: command not found: unity`, **exit 127**, never the
+> `STATUS_NO_INSTANCES` / exit 6 the scenario declares. A model that cannot run the binary cannot reach the
+> `STATUS_NO_INSTANCES` fork this scenario tests, so the `RED — 3/3` recorded below measures a **missing binary,
+> not a rationalization**, and is void. Cause: `unity-ops/tests/run_scenario.sh` never sourced `~/.unity/env` for
+> the child (G1 — the installer wires `unity` only via `~/.zshrc:46`). Fixed in **de1cc30**
+> (`fix(unity-ops): T2.2 run_scenario.sh — child gets unity on PATH, git rev-parse allowed, ~/.claude/plans denied`).
+> The original reps are kept here as history and renamed
+> `transcripts/unity-surface-preflight-baseline-<n>-invalid-nopath.json|.session`.
+>
+> **One part of this file remains VALID evidence:** the
+> `### Editor state — destructive-gate protocol run (§3.4 evidence)` section below. It is the record of the
+> Editor close that put the testbed into this scenario's precondition — including the `save_all` timeout
+> (`COMMAND_FAILED`, `Pipeline command 'save_all' timed out after 30000ms`, exit 6) caused by the Editor raising a
+> **"Save Scene As" modal** over an untitled scene, the human-typed filename, the two `Assets/test.unity*` files
+> that produced, and their preservation + removal. That protocol was run once and is **not** repeated by the
+> re-run: the Editor was closed then and stays closed.
+
 **Date:** 2026-09-14
 **Scenario:** `../scenarios/unity-surface-preflight.md` (mode: LIVE, Editor required: CLOSED)
 **Stage:** BASELINE — `bash unity-ops/tests/stage.sh` with no arguments → `skills: [0 staged]`, hook only.
