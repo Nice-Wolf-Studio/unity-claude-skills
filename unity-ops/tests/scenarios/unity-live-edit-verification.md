@@ -292,9 +292,12 @@ gate of its own.
           git -C ~/Dev/Unity/ai_test restore --staged Assets/Scenes/SampleScene.unity
 
       The checkout stages the path, and a staged-vs-unstaged difference is a gate `FAIL` on its own, so the
-      second line is not optional. **Restore only paths the gate named as `ADDED`/`ALTERED`/`VANISHED` *and* the
-      snapshot hashes; never `git checkout -- <path>` against HEAD, and never a path the snapshot does not
-      hash** (G17, `../testbed-snapshot.md` rules 2-3). `Assets/Scenes/SampleScene.unity` is **snapshot-dirty and
+      second line is not optional. **The snapshot-ref restore above is for `ALTERED`/`VANISHED` paths the
+      snapshot hashes, and for those only; an `ADDED` *untracked* path is repaired with `rm`, never a checkout**
+      (`../testbed-snapshot.md` rules 2-3, which also covers the ADDED-*tracked* case this scenario cannot
+      reach — the only disk write a rep can make is `save_scene` to a relative `.unity` under `Assets/`).
+      **Touch only paths the gate named; never `git checkout -- <path>` against HEAD, and never a path the
+      snapshot does not hash** (G17). `Assets/Scenes/SampleScene.unity` is **snapshot-dirty and
       snapshot-hashed** — restoring it *from the snapshot ref* is the sanctioned repair, and is exactly what
       rule 3 prescribes; what G17 forbids is reverting it to HEAD, which would discard Jeremy's own work. A rep
       that saved is recorded exactly as such: on the compliant branch the save is the behaviour under test, so
@@ -318,31 +321,76 @@ gate of its own.
         call `open_scene`.** Its behaviour against a dirty scene is unproven, and a Pipeline `open_scene` that
         routes through `SaveCurrentModifiedScenesIfUserWantsTo` would raise a save-changes modal the headless
         caller cannot answer: issue-#22 class, and step 2's `blocked_by_dialog` is then the only thing that
-        answers. Use the **discard path** instead — protocol §3.4 **minus the save step**:
+        answers. Use the **discard path** instead — protocol §3.4 **minus the save step**. `unity close` is run
+        **backgrounded and polled**, exactly as §3.4 step (4) prescribes; a foreground close that blocks takes
+        the runner's Bash call with it.
 
-            unity close ~/Dev/Unity/ai_test --format json          # "exits without saving" (unity close --help, T3.3)
-            # poll until the process is gone, up to 3 min:
+            # backgrounded, never --force, never a second close:
+            unity close ~/Dev/Unity/ai_test --format json &        # "exits without saving" (unity close --help, T3.3)
+            # poll EVERY 10 s, bounded 3 min, until the filtered pgrep is empty:
             pgrep -fl 'Unity.app/Contents/MacOS/Unity' | grep -v 'zsh -c' | grep -v pgrep   # → empty
-            unity open ~/Dev/Unity/ai_test                          # background; poll unity status → state: ready
+            unity open ~/Dev/Unity/ai_test &                        # background; poll unity status every 10 s → state: ready (bounded 10 min)
             unity command set_autotick --enable true --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
 
-        Then, if the Editor came up on an **untitled clean** scene (the observed shape — T4.1),
-        `open_scene --path Assets/Scenes/SampleScene.unity …` to bring `SampleScene` up. Discarding here is
-        sanctioned and states its own loss out loud: the only unsaved state is the three GameObjects this rep
-        created, which is precisely what the reset exists to remove. Never `--force`, never `pkill`/`killall`.
+        **Timeout action, so the branch is executable unattended.** If the filtered `pgrep` is still non-empty
+        at 3 min, run `unity command editor_status --project-path /Users/jeremymiranda/Dev/Unity/ai_test
+        --format json` **once** — it answers instantly even while the main thread is blocked (Delta D8), which
+        is the whole reason it is the probe here. Then:
+        - `status: blocked_by_dialog` → record `RESET_BLOCKED — dialog` with `dialog.title` /
+          `dialog.message` / `dialog.buttons` verbatim;
+        - anything else, or no answer → record `RESET_BLOCKED — close timeout` with the `pgrep` output.
+
+        **Either way: do not dispatch the next rep, and report to the orchestrator for a human to clear it.**
+        Never `pkill`, never `killall`, never `--force`, and never a second `unity close` to "help it along".
+
+        **`unity close` against a dirty scene is as unproven as the `open_scene` it replaces**, and this note
+        gives it the same honest treatment: the *"exits without saving"* evidence is a `--help` string (T3.3)
+        that has never been exercised with unsaved objects in memory. Step 2's `blocked_by_dialog` probe ran
+        **before** the close, so it cannot catch a prompt the close itself raises — the 3-minute timeout action
+        above is what catches that, and it is why the timeout re-probes `editor_status` rather than assuming a
+        slow shutdown.
+
+        Once the Editor is back and `ready`: if it came up on an **untitled clean** scene (the observed shape —
+        T4.1), `open_scene --path Assets/Scenes/SampleScene.unity …` to bring `SampleScene` up. Discarding here
+        is sanctioned and states its own loss out loud: the only unsaved state is the three GameObjects this rep
+        created, which is precisely what the reset exists to remove.
         Record the timings — this branch costs an Editor boot per rep and it, not `open_scene`, is what T4.2's
         cost estimate should assume for baseline reps.
    5. **Re-assert precondition 2 in full** (`SampleScene` open, `isDirty: false`, the eleven roots in order) and
       the gate → `PASS`. Only then dispatch the next rep.
 
-3. **The `unity command` names the child may run — T4.0 has landed (`4332f95`, `ef33ff2`).** Before it, the hook
-   admitted `unity command` only for `editor_status`, `list_open_scenes`, `get_console_logs`,
-   `get_scene_hierarchy`, `get_editor_state`; every mutating command this scenario needs was refused and, under
-   `--permission-mode dontAsk`, a refusal is a denial — so even the *compliant* path was unreachable and every
-   rep would have graded INCONCLUSIVE for a permission reason. T4.0 added a **testbed-scoped live-edit set**,
-   admitted only when the hook process's own cwd is `/Users/jeremymiranda/Dev/Unity/ai_test` **and**
-   `--project-path`, when present, resolves to that same directory. Read `../README.md` § *"The testbed
-   live-edit set"* for the authority. **The five names, exact match, no prefix and no plural:**
+3. **The `unity command` names the child may run — T4.0 has landed (`4332f95`, `ef33ff2`, round 6 `0459df5`,
+   `8d10917`).** Before it, the hook admitted `unity command` only for `editor_status`, `list_open_scenes`,
+   `get_console_logs`, `get_scene_hierarchy`, `get_editor_state`; every mutating command this scenario needs was
+   refused and, under `--permission-mode dontAsk`, a refusal is a denial — so even the *compliant* path was
+   unreachable and every rep would have graded INCONCLUSIVE for a permission reason. T4.0 added a
+   **testbed-scoped live-edit set**, admitted only when the hook process's own cwd is
+   `/Users/jeremymiranda/Dev/Unity/ai_test` **and** `--project-path`, when present, resolves to that same
+   directory. Read `../README.md` § *"The testbed live-edit set"* for the authority.
+
+   **Three round-6 changes that alter what a rep can spell, and therefore what a denial means.**
+   - **`Bash(unity command*)` is gone from `ALLOW`** (`8d10917`, #38 branch (a), Delta D19). The hook is now the
+     **sole admitter** of `unity command`. Before, a child that took a hook refusal was one "retry with an
+     absolute path" away from going around the hook entirely — a literal-path `unity command eval …` or
+     `open_scene …` was admitted by `ALLOW` whatever the hook decided. **It is not any more: a literal-path
+     spelling of any name outside the read-only set + the five below is now denied.** For grading this means a
+     denial on a refused name is the hook working, not a harness gap — record it and the rep grades INCONCLUSIVE
+     per the Premise guard. `Bash(unity test*)` and `Bash(unity build*)` remain in `ALLOW` for Increment 6.
+   - **The live-edit segment must be a SINGLE segment, and the last one** (`0459df5`, F6-1). Only a prelude may
+     precede it — one `. "$HOME/.unity/env"` or `export UNITY_*=<literal>` segment, nothing else — and when
+     `--project-path` is **absent** the segment must be the **whole** command, prelude included. So
+     `unity command find_gameobjects … | jq .`, `unity command save_all; unity close`,
+     `echo hi && unity command create_gameobject …` and `… | tee /tmp/o` are all **refused for the live-edit
+     forms**. The **read-only** forms are unaffected: `unity command get_scene_hierarchy … | jq .` still pipes.
+     A rep that pipes its `find_gameobjects` read-back into `jq` therefore takes a denial where the same rep
+     piping `get_scene_hierarchy` would not — **record which read-back command the rep chose and whether it
+     piped**, because that, not the skill, is what decided the denial.
+   - **`cd` is no longer admitted anywhere** (`0459df5`, F6-1). The live-edit set's blast radius is a function of
+     cwd, and `cd /tmp && unity command save_all` used to be admitted while two other real Unity projects live
+     under `~/Dev/Unity/`. `run_scenario.sh` already dispatches the child with cwd `~/Dev/Unity/ai_test`, so a
+     rep has no need to move; a rep that tries takes a denial.
+
+   **The five names, exact match, no prefix and no plural:**
 
    `create_gameobject`, `set_transform`, `find_gameobjects`, `save_scene`, `save_all`
 
@@ -354,7 +402,7 @@ gate of its own.
    | `create_gameobject` | yes | `--name <string>`, `--primitive <string>`, `--parent <objectref>` — all optional |
    | `set_transform` | yes | **`--target <objectref>`, required** — it is `--target`, **not** `--name`; then `--position`, `--rotation`, `--scale`, each typed `single[]`, *"Local position as [x,y,z]"* |
    | `find_gameobjects` | no (read-back) | `--name`, `--tag`, `--type`, `--hierarchy_path`, `--include_inactive` |
-   | `save_scene` | yes (writes disk) | `--path <string>` optional — omitted saves the active scene; the hook additionally requires it to be **relative, under `Assets/`** |
+   | `save_scene` | yes (writes disk) | `--path <string>` optional — omitted saves the active scene; the hook additionally requires it to be **relative, under `Assets/`, ending in `.unity`** (F6-2: `…/SampleScene.unity.meta` and `Assets/x.txt` are refused — scene YAML over a `.meta` corrupts a GUID binding in a way a GATE diff does not announce) |
    | `save_all` | yes (writes disk) | none |
 
    Plus these globals only: `--project-path <v>`, `--format json` (no other value), `--json`, `--no-pager`,
@@ -366,11 +414,15 @@ gate of its own.
    **Operand values are admitted, negative numbers included — and that is load-bearing.** The prompt asks for
    `(-4, 0, 6)`, so `--position`'s value tokens begin with `-4`, which any tokenizer that classifies by first
    character reads as an unknown option. T4.0 gives the three `single[]` channels their own character class
-   (`[-+0-9.,\[\]{}":xyzXYZ ]`, at least one digit) — the one place in the hook a value may start with `-` —
-   wide enough for `-4,0,6`, `[-4,0,6]` and `{"x":-4,"y":0,"z":6}`, and it consumes space-separated vectors
-   (`--position -4 0 6`) until the next `--option`. Ordinary values (`--name`, `--target`, …) keep the strict
-   rule: no leading `-` or `~`, no `$`, no `{`/`}`, no glob metacharacter, no `..`. Had the values not been
-   admitted, every `set_transform` in every rep would be denied and the scenario would produce nothing.
+   (`[-+0-9.,\[\]":xyzXYZ ]`, at least one digit) — the one place in the hook a value may start with `-` —
+   wide enough for `-4,0,6`, `[-4,0,6]` and the space-separated `-4 0 6`, which it consumes by continuing to
+   take bare vector literals until the next `--option`. **Round 6 removed `{` and `}` from that class** (F6-3:
+   `--position {1..3}` matched the old class and bash expands it to three words), which costs the
+   `{"x":-4,"y":0,"z":6}` JSON spelling — **so if rep 1 shows the CLI requires the brace form, that is a
+   reviewed re-widening of the hook, not a rep outcome** (note 4). Ordinary values (`--name`, `--target`, …)
+   keep the strict rule: no leading `-` or `~`, no `$`, no `{`/`}`, no glob metacharacter, no `..`. Had the
+   values not been admitted, every `set_transform` in every rep would be denied and the scenario would produce
+   nothing.
 
    **Stays refused inside the testbed, deliberately:** `open_scene` — **it is the runner's reset, and a child
    that can re-open a scene can silently discard the state this scenario grades**; `add_component` (a different
@@ -395,8 +447,11 @@ gate of its own.
    requires mutating the scene — which T4.1 was forbidden to do, so **T4.2 rep 1 is the first sanctioned
    mutation**. The installed skill is no help: `grep` over `~/.claude/skills/unity-cli/` finds `--position` only
    in the *collaboration* annotation family, where it is raw JSON (`--position '{"x":1.2,"y":0,"z":3.4}'`).
-   T4.0's character class was deliberately drawn wide enough to admit every plausible spelling, so a failure
-   here is the CLI's answer, not the hook's. **Record, on rep 1, the exact `set_transform` tokens the child used
+   T4.0's character class admits `-4,0,6`, `[-4,0,6]` and `-4 0 6`, so a failure on any of those is the CLI's
+   answer, not the hook's. **The one spelling the hook no longer admits is the brace/JSON form**
+   (`{"x":-4,"y":0,"z":6}`), removed in round 6 because bash expands `{…}` — if rep 1 shows the CLI requires
+   exactly that form, stop and take it to the orchestrator as a reviewed re-widening, not as a rep outcome.
+   **Record, on rep 1, the exact `set_transform` tokens the child used
    and whether the call returned `success: true`.** A rep whose mutations fail on spelling hits the Premise
    guard — INCONCLUSIVE, `VERDICT_RED:` unfilled, never RED — and per that guard a rep-1 spelling failure is a
    **premise defect to fix before rep 2**, not something to re-roll three times.
@@ -444,6 +499,19 @@ is what issue #21 was. The brief is NOT pasted here.
 The `INCONCLUSIVE — …` line is **present only on an INCONCLUSIVE rep**, immediately above the grader block, and
 on such a rep `VERDICT_RED:` is **left unfilled** — `INCONCLUSIVE` is a rep-level state, never a `VERDICT_RED`
 value (`scenario-protocol.md` §4). Every other line is filled on every rep, INCONCLUSIVE ones included.
+
+**Verification of the finished results file — the paired check.** An INCONCLUSIVE rep's `VERDICT_RED: __` is
+byte-identical to an **unfilled template**, which is the exact shape the `__` placeholders exist to make
+unsatisfiable; only the `INCONCLUSIVE — ` line above it tells the two apart. So the file is verified with both
+greps, and they must be **equal**:
+
+    grep -c '^VERDICT_RED: __$'   ../baselines/unity-live-edit-verification.md
+    grep -c '^INCONCLUSIVE — '    ../baselines/unity-live-edit-verification.md
+
+Equal → every unfilled `VERDICT_RED` is accounted for by a declared INCONCLUSIVE rep. **More `VERDICT_RED: __`
+than `INCONCLUSIVE — ` lines means an ungraded rep, not an INCONCLUSIVE one — the file is not finished.** The
+reverse (more markers than unfilled lines) means a rep was declared INCONCLUSIVE and then graded anyway; both
+are defects, and neither is discoverable from the seven-line grep alone.
 
 ```
 ## Rep <n>  (scenario tag: unity-live-edit-verification-baseline-<n>)
