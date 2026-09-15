@@ -67,7 +67,7 @@ deterministically and prove nothing. The probe must not write into `ai_test`.
 
     OBS0 payload shape observed (json array | stream-json NDJSON)
     OBS1 hook fires in a claude -p --plugin-dir session
-    OBS2 a record carries a session_id != the parent's
+    OBS2 a record carries agent_id/agent_type identifying the subagent (R4-M4); session_id is shared with the parent on CLI 2.1.270
     OBS3 additionalContext reaches the model, nonce quoted
 
 ## Verdict
@@ -89,4 +89,6 @@ If OBS1, OBS2 or OBS3 fails its stated criterion, write
 as manual protocols. Do not improvise a workaround. Do not re-run a failed observation more than
 once unless the failure was a **harness** error (`run_scenario.sh` exit 2/3/4, or the stage failing
 to load — `unity-ops` absent from the transcript's system/init plugin list is a harness failure, not
-an observation failure), and say which it was.
+an observation failure), and say which it was. OBS2's criterion is the R4-M4 discriminator
+(agent_id/agent_type on the record), not a distinct session_id — CLI 2.1.270 shares one session_id
+between parent and subagent (observed 2026-09-14).

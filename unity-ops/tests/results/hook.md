@@ -504,6 +504,31 @@ a record in `decisions.jsonl` proves an **attempt**, not an execution. Two conse
 This also means OBS2's record is valid evidence: the hook fired for the subagent's tool call
 independently of whether that call was allowed to proceed.
 
+#### Re-grade under R4-M4 — decision 2026-09-14
+
+**Decision.** Jeremy, 2026-09-14: Observation 2 is accepted under DESIGN.md's R4-M4 discriminator
+(`agent_id`/`agent_type`), because CLI 2.1.270 issues one `session_id` to parent and subagent,
+making the literal "session_id differs" criterion unsatisfiable while the hook demonstrably fired
+for the subagent's call.
+
+```
+$ jq -c 'select(.scenario=="hook-observe-2") | {session_id,agent_id,agent_type,tool,pattern}' ~/.local/state/unity-ops/decisions.jsonl
+{"session_id":"f705671d-69d8-4927-abd6-d9578b138e31","agent_id":"a3771de7efb9a77a5","agent_type":"general-purpose","tool":"Bash","pattern":"unity-invocation"}
+```
+
+```
+$ jq -r '(if type=="array" then .[] else . end) | .session_id // empty' unity-ops/tests/transcripts/hook-observe-2.json | sort -u
+f705671d-69d8-4927-abd6-d9578b138e31
+```
+
+The literal Step 8 criterion — a record whose `session_id` differs from the parent's — is
+unsatisfiable on CLI 2.1.270 by construction, since the CLI issues exactly one `session_id` per
+session regardless of how many subagents run inside it. `agent_id`/`agent_type` is the discriminator
+that identifies the subagent itself, while `session_id` remains the run-level join key shared by
+every record in that session. The record is evidence that the hook fired for an attempted
+subagent tool call, not that the call executed — `den() = 2` shows the permission layer denied it
+(issue #15).
+
 ### Observation 3 — `additionalContext` reaches the model
 
 ```bash
@@ -597,10 +622,10 @@ OBS2's was denied before it ran), and observation 3 wrote under `/tmp`.
 
     OBS0 payload shape observed (json array | stream-json NDJSON)
     OBS1 hook fires in a claude -p --plugin-dir session
-    OBS2 a record carries a session_id != the parent's
+    OBS2 a record carries agent_id/agent_type identifying the subagent (R4-M4); session_id is shared with the parent on CLI 2.1.270
     OBS3 additionalContext reaches the model, nonce quoted
 
 OBS0: OBSERVED
 OBS1: OBSERVED
-OBS2: FAILED — FALLBACK §10 alternative C
+OBS2: OBSERVED
 OBS3: OBSERVED
