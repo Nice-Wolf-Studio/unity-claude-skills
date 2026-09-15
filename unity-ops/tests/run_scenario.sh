@@ -63,6 +63,12 @@ fi
 printf '%s' "$TAG" > "$FLAG"
 rm -f "${T%.json}.session"      # never leave a previous run's id beside a new transcript
 
+# --- 3b. [T2.2 finding] Three things a terminal-launched session has that a bare spawn lacks:
+#   (a) `unity` on PATH — ~/.zshrc:46 sources ~/.unity/env, so the child sources it too; without it every
+#       rep printed `unity: command not found` (127) instead of STATUS_NO_INSTANCES and the baseline was void;
+#   (b) `Bash(git rev-parse*)` — an observed read-only probe the plan's list did not carry;
+#   (c) a Read deny on ~/.claude/plans/** — a baseline rep followed the hook advisory into the user-level
+#       plan file for THIS plugin, which contaminates every result run.
 # --- 4. Dispatch, IN THE BACKGROUND, then block in `wait`. Explicit permission envelope so a
 #        denied probe cannot read as RED.  [R3-4] [R4-F3] ---
 # The rules contain SPACES and GLOB characters — `Bash(unity status*)` is ONE rule — so they must
@@ -81,7 +87,7 @@ else
          "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
          "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
          "Bash(unity command*)" "Bash(unity pipeline list*)" "Bash(unity test*)" \
-         "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)")
+         "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)" "Bash(git rev-parse*)")
 fi
 FMT="${UNITY_OPS_FORMAT:-json}"
 # Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
@@ -92,10 +98,12 @@ if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
   [ "$RC" = 0 ] && cp "${UNITY_OPS_DRYTRANSCRIPT:-/dev/null}" "$T"
 else
   ( cd ~/Dev/Unity/ai_test && \
+    . "$HOME/.unity/env" 2>/dev/null; \
     UNITY_TEST_TIMEOUT=600 UNITY_BUILD_TIMEOUT=1800 UNITY_RUN_TIMEOUT=600 \
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
       --model "${UNITY_OPS_MODEL:-sonnet}" \
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
+      --disallowedTools "Read(//Users/jeremymiranda/.claude/plans/**)" \
       -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!
   wait "$child"; RC=$?; child=""
