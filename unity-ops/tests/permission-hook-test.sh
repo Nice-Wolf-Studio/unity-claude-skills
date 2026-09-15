@@ -191,6 +191,19 @@ allow	basename /a/b
 allow	echo hello
 allow	unity pipeline list --format json --no-pager
 allow	ls >/dev/null
+# ---- T3.1 — unity vcs affected (option whitelist) ----
+allow	unity vcs affected
+allow	unity vcs affected --format json --no-pager
+allow	unity vcs affected --since HEAD~1 --format json
+allow	unity vcs affected "$PWD" --json
+allow	unity vcs affected --help
+pass	unity vcs affected --log-proxy
+pass	unity vcs affected --proxy http://x:1 --json
+pass	unity vcs affected --since "$(id)"
+pass	unity vcs affected --since -x
+pass	unity vcs status
+pass	unity vcs affected extra1 extra2
+pass	unity vcs affected --format tsv
 TABLE_EOF
 
 python3 - "$HOOK" "$TMP/table.tsv" <<'PY'

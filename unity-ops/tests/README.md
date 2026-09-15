@@ -108,6 +108,21 @@ What it is and is not:
     `json`, `--no-pager`; `unity skill install <target> --list` is refused. `unity pipeline` is
     `list` only; `unity command` is the five read-only editor commands; every
     `--yes`/`--force`/`--allow-install`/`--confirm` spelling is refused outright.
+  - **`unity vcs` is `affected` only** (T3.1) — `unity vcs` bare and every other `unity vcs
+    <x>` fall through to normal permission evaluation, same as any unlisted subcommand. `unity vcs
+    affected [path] [options]` is read-only reporting (it diffs against the merge base with `--since`,
+    never writes). Admitted trailing tokens, in any combination: one optional positional path (refused
+    if it starts with `-`; a `$(`/backtick anywhere in the whole command is already refused above this
+    check), `--since <ref>` (the value must not itself start with `-`), `--format json`, `--json`,
+    `--no-pager`, `--no-banner`, `--non-interactive`, `--quiet`, `--timeout <digits>`, `--verbose` —
+    or `--help`/`-h`, but **only** as the sole trailing token, mixed with nothing else. Everything else
+    the CLI accepts here is refused, most importantly the two options that are not read-only:
+    `--proxy <url>` sends the run's traffic through an arbitrary proxy, and `--log-proxy` writes
+    `proxy-request.json` into the project — neither belongs in a read-only set, so neither is admitted
+    (`--proxy-disable`, `--no-log-proxy` and `-V` are refused too, simply because they are not on the
+    admit list). Live probe: `permission-hook-probe-vcs-affected.json`, `permission_denials: []`,
+    exit 0. `run_scenario.sh`'s `ALLOW` array is unchanged by this addition — `unity vcs affected` is
+    admitted only through this hook, exactly like the `"$PWD"`-expansion case the hook was built for.
   - **`--help`/`-h` must be the last token and nothing may follow it** — the accepted forms are
     exactly `unity --help`, `unity -h`, `unity --version`, `unity <sub> --help` and
     `unity <sub> <sub2> --help`. `unity skill --help install /x` and `unity --help close` are refused

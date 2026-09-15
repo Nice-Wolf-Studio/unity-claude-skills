@@ -80,11 +80,17 @@ session = d.get("session_id") or ""
 # implements it), `sort --compress-program=`, `uniq IN OUT`. A probe uses grep/head/cut/jq or the
 # Grep and Glob tools instead. ALSO ABSENT: `unity test` and `unity build` -- neither is read-only
 # (a junit report, a build output), even though ALLOW still admits both LITERALLY.
-UNITY_SUB = {"status", "list", "command", "pipeline", "skill"}   # --version/--help: exact forms only
+UNITY_SUB = {"status", "list", "command", "pipeline", "skill", "vcs"}   # --version/--help: exact forms only
 UNITY_COMMAND_RO = {"editor_status", "list_open_scenes", "get_console_logs",
                     "get_scene_hierarchy", "get_editor_state"}
 UNITY_DESTRUCTIVE_FLAGS = {"--yes", "--force", "--allow-install", "--confirm"}
 UNITY_SKILL_TAIL = {"--format", "json", "--no-pager"}   # the ONLY tokens allowed after `--list`
+# `unity vcs affected [path] [options]` — read-only reporting (T3.1). Flags that take no value
+# and are safe to admit expansion-tolerantly; `--since`/`--format`/`--timeout` are checked separately
+# below because they take a value. Deliberately absent: `--proxy`/`--log-proxy` (network / writes
+# proxy-request.json), `--proxy-disable`/`--no-log-proxy` (not in the admit list either), `-V`.
+UNITY_VCS_AFFECTED_FLAGS = {"--json", "--no-pager", "--no-banner", "--non-interactive", "--quiet",
+                            "--verbose"}
 GIT_SUB = {"status", "diff", "rev-parse", "log", "show"}
 # git options that make git run a program or write a file without any shell redirection:
 #   -c diff.external=… / --config-env  -> arbitrary program;  --exec-path, --git-dir, --work-tree
@@ -130,6 +136,43 @@ def tail_ok(tokens, verbose_ok):
         if t == "--no-pager" or (verbose_ok and t == "--verbose"):
             i += 1; continue
         return "argument outside the read-only option whitelist: " + t
+    return ""
+# `unity vcs affected` tail: at most one positional path, `--since <ref>` (value must not itself look
+# like an option — `--since -x` is refused, matching `--timeout`'s "must be a value" shape), and the
+# no-value flags in UNITY_VCS_AFFECTED_FLAGS. `--help`/`-h` is admitted ONLY as the sole trailing
+# token — mixed with anything else it is refused, same posture as `--help` elsewhere in this file.
+def vcs_affected_tail_ok(tokens):
+    if tokens == ["--help"] or tokens == ["-h"]:
+        return ""
+    took_positional = False
+    i, n = 0, len(tokens)
+    while i < n:
+        t = tokens[i]
+        if t in ("--help", "-h"):
+            return "unity vcs affected: --help/-h admitted only as the sole trailing token"
+        if t == "--since":
+            if i + 1 >= n:
+                return "unity vcs affected: --since without a value"
+            val = tokens[i + 1]
+            if val.startswith("-"):
+                return "unity vcs affected: --since with a value that starts with -: " + val
+            i += 2; continue
+        if t == "--format":
+            if i + 1 >= n or tokens[i + 1] != "json":
+                return "unity vcs affected: --format with a value other than json"
+            i += 2; continue
+        if t == "--timeout":
+            if i + 1 >= n or not tokens[i + 1].isdigit():
+                return "unity vcs affected: --timeout without a numeric value"
+            i += 2; continue
+        if t in UNITY_VCS_AFFECTED_FLAGS:
+            i += 1; continue
+        if t.startswith("-"):
+            return "unity vcs affected: argument outside the read-only option whitelist: " + t
+        if took_positional:
+            return "unity vcs affected: more than one positional argument: " + t
+        took_positional = True
+        i += 1
     return ""
 PUNCT  = "();<>|&"
 
@@ -191,6 +234,15 @@ def words_ok(words):
             why = tail_ok(rest[2:], False)      # no --verbose here; the five names take no operands
             if why:
                 return "unity command " + rest[1] + ": " + why
+        elif s1 == "vcs":
+            # `unity vcs` is read-only reporting only for `affected`; `unity vcs` bare and every other
+            # `unity vcs <x>` fall through to normal permission evaluation, same as an unlisted
+            # subcommand (T3.1).
+            if len(rest) < 2 or rest[1] != "affected":
+                return "unity vcs: only `affected` is read-only"
+            why = vcs_affected_tail_ok(rest[2:])
+            if why:
+                return why
         return ""
 
     if base == "git":
