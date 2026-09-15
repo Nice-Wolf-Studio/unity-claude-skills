@@ -59,12 +59,16 @@ What it is and is not:
     prefixes — in several places **narrower** than `ALLOW` (below).
   - **Plus, not in `ALLOW`:** filters a probe runs over its **own** output, and only ones with no
     option that writes a file or executes a program — `cat head tail wc tr cut basename dirname
-    realpath echo printf pwd ls date true test [ command which jq grep`. **`cd` was in this list
-    until T4.0 round 6 and is now out**: it cannot write or execute, but the testbed live-edit set's
-    blast radius is a function of cwd, and a `cd` segment moves the *command's* shell while the
-    hook's own cwd predicate cannot move — `cd /tmp && unity command save_all` was admitted, and two
-    other real Unity projects live under `~/Dev/Unity/` (F6-1). `pushd`/`popd` were never in the set.
-    A scenario child starts in the testbed and has no need to move. `jq` additionally refuses `--rawfile`/`--slurpfile`/`-f`/`--from-file`
+    realpath echo printf pwd ls date true test [ command which jq grep`. **`cd` is admitted only when its single argument
+    resolves to the testbed** (`~/Dev/Unity/ai_test`, `$HOME/…`, `.`, the literal path): round 6
+    dropped it outright, because the live-edit set's blast radius is a function of cwd and a `cd`
+    segment moves the *command's* shell while the hook's own cwd predicate cannot —
+    `cd /tmp && unity command save_all` was admitted, and two other real Unity projects live under
+    `~/Dev/Unity/` (F6-1). Round 7 restored the one spelling the corpus actually contains
+    (`cd ~/Dev/Unity/ai_test && git status --short`, three times in a committed baseline) by bounding
+    the **destination**: the shell can only ever move *to* the directory the scoping already assumes,
+    so F6-1 stays closed (R7-4). `cd /tmp`, `cd ..`, `cd -`, `cd ~` and bare `cd` are refused, and
+    `pushd`/`popd` were never in the set. `jq` additionally refuses `--rawfile`/`--slurpfile`/`-f`/`--from-file`
     (they read an arbitrary file; jq cannot write one — see the per-character short-option rule
     below), and `command` is allowed only as `command -v`
     (`command rm -rf x` **runs** `rm`). `git log` and `git show` are admitted too, which `ALLOW`
@@ -216,8 +220,20 @@ rule above. `Bash(unity test*)` and `Bash(unity build*)` stay — Increment 6 ne
 `ALLOW`** — Increment 7 will need `recompile`, `recompile_status` and `set_autotick`, and each is a
 reviewed widening of this file rather than a blanket prefix rule.
 
-**The five names, exact match, no prefix and no plural:**
-`create_gameobject`, `set_transform`, `find_gameobjects`, `save_scene`, `save_all`.
+**Four names, exact match, no prefix and no plural:**
+`create_gameobject`, `set_transform`, `save_scene`, `save_all`.
+
+**`find_gameobjects` is *not* one of them — it is in `UNITY_COMMAND_RO`.** T4.0 put it in the
+live-edit set because it is the scenario's read-back step, but it reads the scene graph and changes
+nothing, so it has zero blast radius whatever the cwd; sitting there cost it composability —
+`unity command find_gameobjects … | jq .` was refused while `unity command editor_status … | jq .`
+was fine, and the pipe is the single most likely thing an Increment-4 rep does with a read-back
+(R7-3). As a read-only form it is **not testbed-scoped**: like `editor_status`, it is admitted from
+any cwd and with any `--project-path`. Its catalog options (`--name`, `--tag`, `--type`,
+`--hierarchy_path`, `--include_inactive`) are validated exactly as before — only the scoping and the
+composability differ. The read-only/live-edit asymmetry is deliberate: composition is precisely where
+the hook's-cwd-stands-in-for-the-shell's-cwd substitution could be perturbed, so **mutating** verbs
+stay non-composable.
 
 **Two conditions, both required, evaluated before any option is read:**
 
@@ -234,11 +250,25 @@ reviewed widening of this file rather than a blanket prefix rule.
    the standing `..` rule refuses before resolution — falls through to `pass`. Omitting
    `--project-path` is fine: the CLI auto-detects from the cwd, and condition 1 already pinned it.
 3. **The live-edit segment is the LAST segment of the command, and only a prelude may precede it** —
-   one `. "$HOME/.unity/env"` or `export UNITY_*=<literal>` segment, nothing else. `echo hi && unity
+   one `. "$HOME/.unity/env"` or `export UNITY_*=<literal>` segment, nothing else. A prelude may
+   carry the harmless redirections (`2>/dev/null`, `>/dev/null`, `2>&1`): they are consumed before
+   the prelude test, because `. "$HOME/.unity/env" 2>/dev/null; …` is the spelling two committed
+   transcripts show reps actually writing, and the raw-token test rejected it (R7-2). `echo hi && unity
    command save_all`, `unity command save_all; unity close`, `… | tee /tmp/o` and
    `unity status && unity command create_gameobject …` are all refused. When `--project-path` is
    **absent**, the segment must be the **whole** command — nothing before it at all, prelude
    included.  [F6-1]
+
+4. **The env file must be the one the dispatch hashed.** `run_scenario.sh` computes
+   `sha256($HOME/.unity/env)` at dispatch and exports `UNITY_OPS_ENV_SHA` to the child; the hook
+   re-hashes the file on **every** `.`/`source` admission and refuses on a mismatch
+   (`reason: unity env file changed since dispatch`). Sourcing runs the file's contents as shell in
+   the child's own shell, and that file lives outside the testbed, so a child able to rewrite it
+   could move the shell through a segment condition 3 treats as harmless — the R2-1 chain shape
+   returning through the one door condition 3 leaves open (R7-1). The first layer is `ALLOW`, which
+   now scopes `Write`/`Edit` to the testbed; this is the second. When the variable is **unset** —
+   a bare `claude -p` probe, where nobody promised a digest — the source is still admitted and the
+   log says `reason: read-only set; env sha unverified`.
 
    **Why conditions 1 and 3 are one argument, not two.** Condition 1 reads the *hook process's* cwd
    and stands in for the *shell's* cwd. That substitution is sound only because nothing in the

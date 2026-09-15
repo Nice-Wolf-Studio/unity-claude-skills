@@ -134,6 +134,15 @@ else
 fi
 # Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
 # a skill that holds Sonnet under pressure holds Opus. Verified: `claude -p --model sonnet` accepted on 2.1.270.
+# --- 4b. [T4.0 round 7] [R7-1b] The child may SOURCE `$HOME/.unity/env` -- the permission hook admits
+#     that one path as a prelude, and sourcing runs the file's contents as shell IN the child's shell.
+#     The file is Jeremy's and lives outside the testbed; `ALLOW` scopes Write/Edit to the testbed
+#     (Delta D20), and this is the second layer: hash the file HERE, at dispatch, and hand the digest
+#     to the child. The hook re-hashes on every `.`/`source` admission and refuses on a mismatch, so a
+#     file rewritten mid-run stops being a prelude. An UNSET variable (a bare `claude -p` probe) means
+#     nobody promised a digest: the hook still admits and logs `env sha unverified`.
+UNITY_OPS_ENV_SHA="$( { shasum -a 256 "$HOME/.unity/env" 2>/dev/null || true; } | awk '{print $1}' )"
+export UNITY_OPS_ENV_SHA
 if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
   ( exec sleep "${UNITY_OPS_DRYSLEEP:-2}" ) & child=$!
   wait "$child"; RC=$?; child=""
@@ -142,6 +151,7 @@ else
   ( cd ~/Dev/Unity/ai_test && \
     . "$HOME/.unity/env" 2>/dev/null; \
     UNITY_TEST_TIMEOUT=600 UNITY_BUILD_TIMEOUT=1800 UNITY_RUN_TIMEOUT=600 \
+    UNITY_OPS_ENV_SHA="$UNITY_OPS_ENV_SHA" \
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
       --model "${UNITY_OPS_MODEL:-sonnet}" \
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \

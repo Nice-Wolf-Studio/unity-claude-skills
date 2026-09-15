@@ -217,7 +217,7 @@ pass	-	cd /tmp && unity command editor_status
 pass	TESTBED	echo hi && unity command save_all --project-path "$PWD" --format json
 pass	TESTBED	unity command save_all --project-path "$PWD" --format json; unity close "$PWD"
 pass	TESTBED	unity command save_all --project-path "$PWD" --format json | tee /tmp/o
-pass	TESTBED	unity command find_gameobjects --name Main --project-path "$PWD" --format json | jq .
+allow	TESTBED	unity command find_gameobjects --name Main --project-path "$PWD" --format json | jq .
 pass	TESTBED	pwd && unity command save_all --project-path "$PWD" --format json
 # F6-1(c) — without --project-path the live-edit segment must be the WHOLE command
 pass	TESTBED	. "$HOME/.unity/env"; unity command save_all
@@ -229,7 +229,36 @@ pass	TESTBED	unity command save_scene --path Assets/Scenes/SampleScene --project
 # F6-3 — brace RANGES expand to several words, like brace lists
 pass	TESTBED	unity command set_transform --target X --position {1..3} --project-path "$PWD" --format json
 pass	TESTBED	unity command set_transform --target X --position {1,2,3} --project-path "$PWD" --format json
+# ---- ROUND-7 REVIEW (R7-1b, R7-2, R7-3, R7-4) ----
+# R7-1b — the unity env file is hashed at dispatch; a changed file is not a prelude any more
+pass	TESTBED	. "$HOME/.unity/env" 2>/dev/null; unity command save_all --project-path "$PWD" --format json	UNITY_OPS_ENV_SHA=deadbeef
+pass	TESTBED	. "$HOME/.unity/env"; unity command save_all --project-path "$PWD" --format json	UNITY_OPS_ENV_SHA=deadbeef
+pass	-	. "$HOME/.unity/env"	UNITY_OPS_ENV_SHA=deadbeef
+# R7-4 — cd is admitted again, but ONLY to the testbed
+pass	TESTBED	cd /tmp
+pass	TESTBED	cd ..
+pass	TESTBED	cd
+pass	TESTBED	cd -
+pass	TESTBED	cd ~
+pass	TESTBED	cd /Users/jeremymiranda/Dev/Unity
+pass	TESTBED	cd "/Users/jeremymiranda/Dev/Unity/My project" && unity command save_all
+pass	TESTBED	cd /tmp && unity command find_gameobjects --name Main --format json
+allow	-	cd ~/Dev/Unity/ai_test
+# R7-3 — find_gameobjects is read-only: composable, and NOT testbed-scoped
+pass	TESTBED	unity command find_gameobjects --name Main --project-path "$PWD" --format json; unity close
+pass	TESTBED	unity command find_gameobjects --name Main --project-path "$PWD" --hack x
 # ---- the read-only set: these MUST be `allow` ----
+allow	TESTBED	. "$HOME/.unity/env" 2>/dev/null; unity command save_all --project-path "$PWD" --format json
+allow	TESTBED	. "$HOME/.unity/env" 2>/dev/null; unity command create_gameobject --name Cube1 --primitive Cube --project-path "$PWD" --format json
+allow	TESTBED	. "$HOME/.unity/env" 2>&1; unity command save_all --project-path "$PWD" --format json
+allow	-	. "$HOME/.unity/env"	UNITY_OPS_ENV_SHA=
+allow	-	unity command find_gameobjects --name Main --project-path /tmp/other --format json
+allow	/tmp	unity command find_gameobjects --name Main --format json
+allow	TESTBED	unity command find_gameobjects --name Main --include_inactive true --project-path "$PWD" --format json
+allow	TESTBED	cd ~/Dev/Unity/ai_test && git status --short
+allow	TESTBED	cd . && unity status --format json
+allow	TESTBED	cd /Users/jeremymiranda/Dev/Unity/ai_test && ls
+
 allow	TESTBED	. "$HOME/.unity/env"; unity command find_gameobjects --name Main --project-path "$PWD" --format json
 allow	TESTBED	export UNITY_NO_BANNER=1; unity command save_all --project-path "$PWD" --format json
 allow	TESTBED	unity command save_all
@@ -341,7 +370,7 @@ pass	TESTBED	unity command set_transform --name Spawner --position -4 0 3 --proj
 pass	/tmp	unity command create_gameobject --name Spawner --project-path "$PWD" --format json
 pass	/tmp	unity command create_gameobject --name X --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
 pass	/tmp	unity command set_transform --target Spawner --position -4 0 3 --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
-pass	/tmp	unity command find_gameobjects --name Spawner --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
+allow	/tmp	unity command find_gameobjects --name Spawner --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
 pass	/tmp	unity command save_scene --path Assets/Scenes/SampleScene.unity --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
 pass	/tmp	unity command save_all --project-path /Users/jeremymiranda/Dev/Unity/ai_test --format json
 # the READ-ONLY set is NOT testbed-scoped and must be unaffected by the cwd column
@@ -376,7 +405,7 @@ pass	TESTBED	unity cmd create_gameobject --name X --project-path "$PWD" --format
 # -- no NEW --help admission, and no auto-confirm flag --
 pass	TESTBED	unity command create_gameobject --help
 pass	TESTBED	unity command set_transform --help
-pass	TESTBED	unity command find_gameobjects --help
+allow	TESTBED	unity command find_gameobjects --help
 pass	TESTBED	unity command save_scene --help
 pass	TESTBED	unity command save_all --help
 pass	TESTBED	unity command create_gameobject --name X --project-path "$PWD" --help
@@ -415,20 +444,30 @@ pass	TESTBED	unity status --format json && unity command create_gameobject --nam
 TABLE_EOF
 
 python3 - "$HOOK" "$TMP/table.tsv" "$HERE" "$TESTBED" <<'PY'
-import json, os, subprocess, sys
+import hashlib, json, os, subprocess, sys
 
 hook, table, here, testbed = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# Every row runs with UNITY_OPS_ENV_SHA set to the file's REAL sha256, which is what run_scenario.sh
+# exports at dispatch -- so the `. "$HOME/.unity/env"` rows exercise the MATCHING path rather than
+# the unset-variable fallback. A row's optional 4th column overrides it (`…=deadbeef` for the
+# mismatch path, `…=` for the unset/bare-probe path).  [round-7 review R7-1b]
+try:
+    with open(os.path.expanduser("~/.unity/env"), "rb") as f:
+        REAL_ENV_SHA = hashlib.sha256(f.read()).hexdigest()
+except Exception:
+    REAL_ENV_SHA = ""
 rows, bad = [], []
 for n, line in enumerate(open(table, encoding="utf-8"), 1):
     line = line.rstrip("\n")
     if not line.strip() or line.startswith("#"):
         continue
-    parts = line.split("\t", 2)
-    if len(parts) != 3:
-        print("permission-hook-test: table line %d is not expected<TAB>cwd<TAB>command: %r"
+    parts = line.split("\t", 3)
+    if len(parts) < 3:
+        print("permission-hook-test: table line %d is not expected<TAB>cwd<TAB>command[<TAB>env]: %r"
               % (n, line), file=sys.stderr)
         sys.exit(2)
     exp, where, cmd = parts[0].strip(), parts[1].strip(), parts[2]
+    envcol = parts[3].strip() if len(parts) == 4 else ""
     if exp not in ("allow", "pass"):
         print("permission-hook-test: table line %d: expected must be allow|pass, got %r" % (n, exp),
               file=sys.stderr)
@@ -438,13 +477,29 @@ for n, line in enumerate(open(table, encoding="utf-8"), 1):
         print("permission-hook-test: table line %d: cwd %r does not exist" % (n, cwd),
               file=sys.stderr)
         sys.exit(2)
-    rows.append((n, exp, cwd, where, cmd.replace("<NL>", "\n")))
+    overrides = {}
+    for pair in envcol.split():
+        if "=" not in pair:
+            print("permission-hook-test: table line %d: env column wants NAME=VALUE, got %r"
+                  % (n, pair), file=sys.stderr)
+            sys.exit(2)
+        k, v = pair.split("=", 1)
+        overrides[k] = v
+    rows.append((n, exp, cwd, where, cmd.replace("<NL>", "\n"), overrides))
 
 failed = []
-for n, exp, cwd, where, cmd in rows:
+for n, exp, cwd, where, cmd, overrides in rows:
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd},
                           "session_id": "hook-test"})
-    r = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True, cwd=cwd)
+    env = dict(os.environ)
+    env["UNITY_OPS_ENV_SHA"] = REAL_ENV_SHA
+    for k, v in overrides.items():
+        if v == "":
+            env.pop(k, None)
+        else:
+            env[k] = v
+    r = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True,
+                       cwd=cwd, env=env)
     out = r.stdout.strip()
     got = "pass"
     if out:
