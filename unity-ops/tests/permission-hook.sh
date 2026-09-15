@@ -145,6 +145,30 @@ def words_ok(words):
             return ""
         return "command without -v"
 
+    # Two entries of the read-only set carry a file-WRITE channel that owes nothing to a shell
+    # redirection, so the redirection check above cannot see them. Narrowed here, at the command
+    # word, rather than left to be discovered later:  `sort -o OUT`, and `uniq IN OUT`.
+    if base == "sort":
+        for t in rest:
+            if t.startswith("-o") or t.startswith("--output"):
+                return "sort -o writes a file"
+        return ""
+    if base == "uniq":
+        # a `-f N` / `-s N` / `-w N` argument is an option value, not an operand
+        skip, cleaned = False, []
+        for t in rest:
+            if skip:
+                skip = False
+                continue
+            if t in ("-f", "-s", "-w", "--skip-fields", "--skip-chars", "--check-chars"):
+                skip = True
+                continue
+            if not t.startswith("-"):
+                cleaned.append(t)
+        if len(cleaned) > 1:
+            return "uniq with an output-file operand"
+        return ""
+
     if base in PLAIN:
         return ""
     return "command word outside the read-only set: " + base

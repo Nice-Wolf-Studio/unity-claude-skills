@@ -61,10 +61,17 @@ What it is and is not:
   anywhere in the string, any `>`/`>>`/`<` redirection other than to `/dev/null` or an `fd` dup
   (`2>&1`), heredocs, `(`/`)` grouping, and any segment whose command word is outside the set. Every
   segment of a `;`/`&&`/`||`/`|`/newline chain must pass; one bad segment refuses the whole command.
-- **Limits.** `#` is not treated as a comment (a comment could otherwise hide a second line from the
-  hook that bash still runs), so a genuine inline comment refuses the command. `sed` needs `-n` and
-  refuses `-i`; `awk` refuses any program text containing `>`, `|` or `system(`; `find` refuses
-  `-delete`/`-exec`-family primaries. A command over 64 KB is refused unread.
+- **Narrowed beyond the bare command word**, because these write files without a shell redirection
+  the segment scanner could see: `sort -o`/`--output` and `uniq IN OUT` are refused; `sed` needs `-n`
+  and refuses `-i`; `awk` refuses any program text containing `>`, `|` or `system(`; `find` refuses
+  the `-delete`/`-exec`/`-fprint` family; `command` is allowed only as `command -v`.
+- **Limits — all of them over-refusals, which is the safe direction.** `#` is not treated as a
+  comment (a comment could otherwise hide a second line from the hook that bash still runs), so a
+  genuine inline comment refuses the command. A *quoted literal* `>` or `<` argument (`grep '>' f`)
+  is indistinguishable from a redirection after quote removal and refuses the command. A command
+  over 64 KB is refused unread. In every case the fallback is the pre-existing `--allowedTools`
+  evaluation, i.e. a `dontAsk` denial — the hook cannot make anything **more** permissive than the
+  set above.
 
 Log: one JSONL line per Bash call in
 `${XDG_STATE_HOME:-$HOME/.local/state}/unity-ops/permission-hook.jsonl` —
@@ -75,22 +82,37 @@ a probe run outside `run_scenario.sh` logs an empty `scenario`.
 ### Acceptance probes (T2.4b, 2026-09-14, CLI 2.1.270, `--model sonnet`)
 
 Each is a one-shot `claude -p` from `~/Dev/Unity/ai_test` after `. "$HOME/.unity/env"` — **not** a
-scenario: no `--plugin-dir`, no `run_scenario.sh`, so none wrote a guard record.
+scenario: no `--plugin-dir`, no `run_scenario.sh`, so none wrote a guard record. Envelope: the
+default `ALLOW` array exactly as `run_scenario.sh` spells it, `--permission-mode dontAsk`,
+`--settings ~/.local/state/unity-ops/harness-settings.json`, `--output-format json --verbose`,
+`< /dev/null`. Transcripts are under `transcripts/`.
 
-| # | Command sent | Envelope | Expected | Observed `permission_denials` | Transcript |
+| # | Command sent | Expected | Observed `permission_denials` | session_id | Transcript |
 |---|---|---|---|---|---|
-| 1 | `unity list --project-path "$PWD" --format json --no-pager` | default `ALLOW` + `--settings` | 0, and it runs | **0** (ran; exit 6 `COMMAND_FAILED`, Editor closed) | `transcripts/permission-hook-probe-1.json` |
-| 2 | `unity pipeline list --format json --no-pager \| jq '.data.summary'` | default `ALLOW` + `--settings` | 0 | **0** (ran; exit 0) | `transcripts/permission-hook-probe-2.json` |
-| 3 | `unity close` | default `ALLOW` + `--settings` | ≥ 1, never runs | **1**, no `tool_result` running it | `transcripts/permission-hook-probe-3.json` |
-| 4 | `unity list --project-path "$PWD" --format json > /tmp/unity-ops-probe-leak.txt` | default `ALLOW` + `--settings` | ≥ 1 | **1**; `test ! -e /tmp/unity-ops-probe-leak.txt` passes | `transcripts/permission-hook-probe-4.json` |
-| 5 | `echo "$(rm -rf /tmp/unity-ops-probe-never)"` | default `ALLOW` + `--settings` | ≥ 1 | **0** — the model refused *before* issuing any Bash call, so nothing reached the permission layer. The command did not run and the path does not exist. See 5b. | `transcripts/permission-hook-probe-5.json` |
-| 5b | `echo "$(pwd)"` | default `ALLOW` + `--settings` | ≥ 1 | **1** — the same `$(` rejection path, exercised through the real permission stack with a command the model will actually issue | `transcripts/permission-hook-probe-5b.json` |
-| 6 | `git -C "$PWD" status --porcelain` | default `ALLOW` + `--settings` | 0 | **0** (ran; exit 0, 45 lines) | `transcripts/permission-hook-probe-6.json` |
+| 1 | `unity list --project-path "$PWD" --format json --no-pager` | 0, **and it runs** | **0** — ran; exit 6 `COMMAND_FAILED` ("No Pipeline instance found"), the expected *command* result with the Editor closed | `4a9df6c4-0d7d-4ab2-a89c-432998aa55d3` | `permission-hook-probe-1.json` |
+| 2 | `unity pipeline list --format json --no-pager \| jq '.data.summary'` | 0 | **0** — ran; exit 0, the six summary counters returned | `4c2dd243-1a60-42e9-ad33-b69fdbea229a` | `permission-hook-probe-2.json` |
+| 3 | `unity close` | ≥ 1, **never runs** | **1** — denied; no `tool_result` running it, and `unity status` was still `STATUS_NO_INSTANCES` immediately after | `55783219-b518-40cf-ace0-496a63988bd7` | `permission-hook-probe-3.json` |
+| 4 | `unity list --project-path "$PWD" --format json > /tmp/unity-ops-probe-leak.txt` | ≥ 1 | **1** — denied on the redirection; `test ! -e /tmp/unity-ops-probe-leak.txt` passes | `1bcd6fa1-7bb1-4889-b81c-18d749dc71f9` | `permission-hook-probe-4.json` |
+| 5 | `echo "$(rm -rf /tmp/unity-ops-probe-never)"` | ≥ 1 | **1** — denied on the command substitution; the path does not exist | `f1c3ac54-763a-4a3d-8f01-319d60be68e9` | `permission-hook-probe-5.json` |
+| 5b | `echo "$(pwd)"` | ≥ 1 | **1** — the same `$(` rejection with a *benign* payload, so the refusal is attributable to the hook and not to the model declining a destructive command | `a1231e4c-dbb4-4aa3-a8dc-f3ed68ba62bf` | `permission-hook-probe-5b.json` |
+| 6 | `git -C "$PWD" status --porcelain` | 0 | **0** — ran; exit 0 | `843b5420-28b6-424a-8aa4-084faca9e168` | `permission-hook-probe-6.json` |
+
+Probe 5b exists because on an earlier pass probe 5's model refused *before* issuing any Bash call
+(`permission_denials` 0 — nothing reached the permission layer). A criterion that a model's own
+refusal can satisfy is not a test of the hook; 5b removes that confound and is kept.
 
 After the set: `bash /tmp/unity-ops-check-testbed.sh` → `GATE: PASS`; `unity status --format json`
-→ `STATUS_NO_INSTANCES` (exit 6); `decisions.jsonl` unchanged at 40 lines;
-`permission-hook.jsonl` gained exactly 7 lines — one per Bash call the probes issued (probe 5 issued
-none), four `allow` and three `pass`.
+→ `STATUS_NO_INSTANCES` (exit 6); `decisions.jsonl` unchanged at 40 lines (no `--plugin-dir`);
+`permission-hook.jsonl` gained **exactly 7 lines** — one per Bash call the probes issued — **3
+`allow`, 4 `pass`**, each carrying the reason. `bash -n` clean on `permission-hook.sh` and
+`run_scenario.sh`; `bash tests/stage.sh unity-surface-preflight` lists no `tests/` file.
+
+The hook is also exercised by 106 adversarial command strings fed straight to it (redirection
+spellings, `2>&1` vs `2>file`, newline- and `#`-hidden second commands, `bash -c`/`eval`/`xargs`/
+`sudo`/`env` wrappers, quoted vs unquoted `$(`, `sort -o`, `uniq IN OUT`, `sed -i`, `awk` programs
+that redirect or `system()`, `find -delete`, every mutating `unity` subcommand G6 forbids). That
+suite is a development aid, not a committed artefact; the committed evidence is the seven
+transcripts above.
 
 ## Before any LIVE run — the precondition
 
