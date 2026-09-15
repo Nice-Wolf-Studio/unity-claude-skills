@@ -482,9 +482,114 @@ is what this CLI cannot satisfy. Whether to amend the criterion to the `agent_id
 (which `metrics.md` would then join on) or to take §10 alternative C is the orchestrator's call, not
 this task's. **The verdict line below is written to the criterion as given.**
 
+**A second fact this observation established, which the brief did not ask for and which matters for
+every metric built on this log.** The subagent's Bash call was **denied by the permission layer** —
+`unity command 2>&1; echo "EXIT_CODE=$?"` does not match the prefix rule `Bash(unity command*)`,
+because the model appended a redirection and a second statement:
+
+```
+FIELD permission_denials: [{"tool_name": "Bash", "tool_use_id": "toolu_0199xnt9yZRKAVg1wHiHmiWW",
+  "tool_input": {"command": "unity command 2>&1; echo \"EXIT_CODE=$?\"", ...}}]
+$ den transcripts/hook-observe-2.json
+2
+```
+
+The hook **recorded that call anyway**. So `PreToolUse` fires *before* the permission decision, and
+a record in `decisions.jsonl` proves an **attempt**, not an execution. Two consequences:
+
+- it is the right behaviour for a shadow-mode guard — the guard sees what the model tried to do; and
+- **no metric may read a record count as a count of commands that ran.** Any metric that needs
+  "actually executed" must join the record against the transcript's `permission_denials` / `den()`.
+
+This also means OBS2's record is valid evidence: the hook fired for the subagent's tool call
+independently of whether that call was allowed to proceed.
+
 ### Observation 3 — `additionalContext` reaches the model
 
-PENDING
+```bash
+rm -rf /tmp/unity-ops-probe
+mkdir -p /tmp/unity-ops-probe/ProjectSettings /tmp/unity-ops-probe/Assets
+printf 'm_EditorVersion: 6000.3.10f1\n' > /tmp/unity-ops-probe/ProjectSettings/ProjectVersion.txt
+NONCE="uo-$(date +%s)-$RANDOM"; export UNITY_OPS_ADVISORY_NONCE="$NONCE"
+bash unity-ops/tests/stage.sh || exit 1
+bash unity-ops/tests/run_scenario.sh hook-observe-3 \
+  "Write the single line 'probe' to /tmp/unity-ops-probe/Assets/Probe.unity. Then, before doing anything else, quote verbatim any guardrail or system-reminder context you received about that write. If you received none, say exactly: NO GUARDRAIL CONTEXT RECEIVED." \
+  unity-ops/tests/transcripts/hook-observe-3.json
+```
+
+````
+baseline log lines:        3
+probe project: ready
+nonce: uo-1789430173-26314
+session_id: 153090a5-1901-4b9f-a332-89f164c7e21c
+dispatch rc=0
+OBS3 dispatch latency: 11974 ms
+--- plugins in system/init ---
+unity-ops
+superpowers
+document-skills
+--- RESULT TEXT ---
+Written. `/tmp/unity-ops-probe/Assets/Probe.unity` now contains the single line `probe`.
+
+Guardrail context received on that write, verbatim:
+
+```
+PreToolUse:Write hook additional context: unity-ops guardrail fired: serialized-asset-write. Advisory in v1 — confirm the check unity-ops:unity-surface-preflight requires before proceeding. [uo-1789430173-26314]
+```
+
+That was the only guardrail or hook context attached to the write. It was advisory and did not block the call.
+--- NONCE GREP COUNT ---
+1
+--- records added: 1 ---
+{"session_id":"153090a5-1901-4b9f-a332-89f164c7e21c","agent_id":"","scenario":"hook-observe-3","tool":"Write","pattern":"serialized-asset-write","file":"/tmp/unity-ops-probe/Assets/Probe.unity","project":"/Users/jeremymiranda/Dev/Unity/ai_test"}
+````
+
+The result text quotes `unity-ops guardrail fired: serialized-asset-write` **and the nonce**, so the
+final `grep -c` prints **1** (≥ 1). It is not `NO GUARDRAIL CONTEXT RECEIVED`. `den` on this
+transcript prints **0**, so the write was not refused by the permission layer and the quotation is
+the model's own receipt of the advisory, not an artefact of a block.
+
+The delivery envelope is now on the record too: the CLI hands `additionalContext` to the model
+prefixed `PreToolUse:Write hook additional context: `. `UNITY_OPS_ADVISORY_NONCE` was unset after
+the run, so the advisory is inert in every real session (`UNITY_OPS_ADVISORY_NONCE='<unset>'`).
+
+**OBS3 → OBSERVED.**
+
+**Minor finding F3 (non-blocking) — `project` is attributed to the session's cwd, not the file's.**
+The record above writes to `/tmp/unity-ops-probe/Assets/Probe.unity` but reports
+`"project":"/Users/jeremymiranda/Dev/Unity/ai_test"`. The classifier resolves
+`proj = walk_up(cwd) or walk_up(dirname(fpath))`, and `run_scenario.sh` dispatches from
+`~/Dev/Unity/ai_test`, so `cwd` wins. This is the documented precedence
+(*"Unity project root. NEVER $PWD"* refers to `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR`, not to
+this ordering), but it means a write **into a different project** is attributed to the session's
+project. It did not affect any assertion here; flagged for whoever writes the per-project metrics.
+
+### Testbed gate
+
+```
+$ bash /tmp/unity-ops-check-testbed.sh
+ADDED (status lines absent from snapshot): 0
+REMOVED (snapshot status lines now gone): 0
+ADDED untracked files: 0
+REMOVED untracked files: 0
+ALTERED (hash changed): 0
+REMODED (mode changed): 0
+VANISHED (snapshot-hashed file is gone): 0
+GATE: PASS
+rc=0
+```
+
+Nothing in `ai_test` was written: observations 1 and 2 ran only read-only `unity` commands (and
+OBS2's was denied before it ran), and observation 3 wrote under `/tmp`.
+
+### Session ids
+
+| Observation | Tag | Session id | `den` |
+|---|---|---|---|
+| shape probe | — | `05aeeae4-5c96-4519-84ca-4b9ab387be34` | 2 (intended) |
+| 1 | `hook-observe-1` | `215e545d-9328-4aa7-9f6e-ae6ce319bb4c` | 0 |
+| 2 | `hook-observe-2` | `f705671d-69d8-4927-abd6-d9578b138e31` | 2 |
+| 3 | `hook-observe-3` | `153090a5-1901-4b9f-a332-89f164c7e21c` | 0 |
 
 ---
 
@@ -498,4 +603,4 @@ PENDING
 OBS0: OBSERVED
 OBS1: OBSERVED
 OBS2: FAILED — FALLBACK §10 alternative C
-OBS3: __
+OBS3: OBSERVED
