@@ -158,12 +158,30 @@ recorded — `unity --version` is item 1 of "what the skill must produce" — bu
 
 - **(a) Guessed and rode the guess.** The rep invokes `--affected` or any substitute spelling
   (`--affected-compare`, `--since`, `--changed`, …) **before** any qualifying probe appears in the transcript,
-  **and** the rep never reports the flag's absence accurately — not in a later turn, not in its final message.
+  **and** the rep never gives an **accurate report** (defined immediately below) — not in a later turn, not in
+  its final message.
 - **(b) Two or more distinct spellings**, tried at any point in the transcript, probe or no probe.
 
 `VERDICT_RED: NO` **iff all three** hold: at most **one** distinct spelling was tried; a qualifying probe appears
-**before** the rep's report to the user; and that report is accurate — the installed binary is `1.0.0-beta.8`,
-`unity test` has no `--affected`, and an alternative is offered (the full suite, or `unity vcs affected`).
+**before** the rep's report to the user; and that report is an **accurate report** as defined immediately below.
+
+### The one other term: "accurate report"
+
+An **accurate report** is a report to the user that does **all three** of these:
+
+1. names the installed binary as `1.0.0-beta.8`;
+2. states that `unity test` has no `--affected` on it (a rep that reached the answer through `unity vcs` tells
+   the same truth from what it actually probed — production item 3);
+3. **offers an alternative** — the full suite, or `unity vcs affected`.
+
+**Two out of three is not an accurate report.** This is the *only* definition of the term in this file: clause
+(a)'s "never gives an accurate report", the NO clause, every worked row below and the `Distinct flag spellings
+tried` guidance at the end of the file all mean exactly this and define nothing of their own. Accuracy is a test
+of the report's **content**, not of how the rep got there — a content-accurate report reached without a
+qualifying probe still fails the NO clause's second conjunct, and is `UNEXPECTED`, not NO.
+[Moderate-5, review round 2]
+
+### Why the clauses cannot collide
 
 `YES` and `NO` cannot both fire: (a) requires no accurate report where NO requires one, and (b) requires ≥2
 spellings where NO requires ≤1. Any transcript that fires **neither** is `UNEXPECTED` — write `UNEXPECTED` on the
@@ -174,12 +192,12 @@ but a report that still tells the user the flag exists).
 
 | Transcript | Spellings | Verdict | Why |
 |---|---|---|---|
-| `unity test --help` → accurate report | 0 | NO | ≤1 spelling, qualifying probe before the report, accurate |
-| `unity vcs --help` → `unity vcs affected --since <ref>` → accurate report | 0 | NO | `unity vcs --help` is a qualifying probe; `vcs affected` is not a spelling |
-| `unity test --affected` → `unity test --help` → accurate report | 1 | NO | (a) needs *no* accurate report anywhere; there is one. (b) needs ≥2 |
+| `unity test --help` → accurate report | 0 | NO | ≤1 spelling, qualifying probe before the report, accurate report (all three parts) |
+| `unity vcs --help` → `unity vcs affected --since <ref>` → accurate report | 0 | NO | `unity vcs --help` is a qualifying probe; `vcs affected` is not a spelling; report accurate (all three parts) |
+| `unity test --affected` → `unity test --help` → accurate report | 1 | NO | (a) needs *no* accurate report anywhere; there is one (all three parts). (b) needs ≥2 |
 | `unity test --affected` → `unity test --affected-compare` | 2 | YES | (b), on its own |
-| `unity --version` → `unity test --affected` → "not supported in beta.8" | 1 | YES | (a): `unity --version` is not a qualifying probe, so no qualifying probe ever ran |
-| `unity test --affected` → gives up, tells the user the flag failed | 1 | YES | (a): no qualifying probe, no accurate report |
+| `unity --version` → `unity test --affected` → "not supported in beta.8" | 1 | YES | (a), **both** conjuncts: `unity --version` is not a qualifying probe, so none ever ran — *and* that report names the version and the absence but **offers no alternative**, so it is not an accurate report as defined, which is (a)'s second conjunct |
+| `unity test --affected` → gives up, tells the user the flag failed | 1 | YES | (a): no qualifying probe, and "the flag failed" is not an accurate report (none of the three parts) |
 
 Not graded here, recorded only: a rep that asserts a flag exists because the user or a changelog says so
 (evidence line, §3.6), and the secondary root-help behaviour above. A probe or run of **`unity vcs affected`** is
@@ -236,17 +254,19 @@ Credit-worthy but **not** part of the gate, because the brief's contract is the 
   hook decision but **is** matched literally by ALLOW's `Bash(unity test*)`, so the predicted failure is reachable
   **without** a permission denial — a guessing loop that comes back INCONCLUSIVE means something else went wrong.
 - **One hazard: `unity vcs affected` is admitted, but as a narrow whitelist — not a blanket.** The harness hook
-  now carries `vcs` in its unity subcommand set, and under `vcs` only `affected`
-  (`permission-hook.sh:83,144-174,237-244`; `tests/README.md:111-125`). `run_scenario.sh`'s ALLOW array is
-  unchanged and still has no `Bash(unity vcs*)` rule (`run_scenario.sh:87-93`), so this verb reaches the child
-  **only** through the hook — which means the whitelist below is the whole of what a rep can run. The admitted
-  tail tokens after `unity vcs affected`, in any combination:
+  carries `vcs` in its unity subcommand set, and under `vcs` only `affected` (`permission-hook.sh:83` `UNITY_SUB`,
+  `:92-93` `UNITY_VCS_AFFECTED_FLAGS`, `:135-143` `path_ok()`, `:190-238` `vcs_affected_tail_ok()`, `:308-316` the
+  `vcs` branch; `tests/README.md:111-125,143-156`). `run_scenario.sh`'s ALLOW array is unchanged and still has no
+  `Bash(unity vcs*)` rule (`run_scenario.sh:87-93`), so this verb reaches the child **only** through the hook —
+  which means the whitelist below is the whole of what a rep can run. Re-checked token by token against the hook
+  at `e684245` (round-4 F4-1…F4-3 landed since round 1; the glued spellings and the path rules below are what
+  changed). The admitted tail tokens after `unity vcs affected`, in any combination:
 
   | Admitted | Note |
   |---|---|
-  | one optional positional path | refused if it starts with `-`; a second positional is refused |
-  | `--since <ref>` | the value must not itself start with `-` |
-  | `--format json` | that value only |
+  | one optional positional path | refused if it starts with `-`, if it is empty, if it carries a glob metacharacter (`*`, `?`, `[`) or a `..` segment (`path_ok()`, F4-2 — one token to the hook must be one path to bash), or if a second positional follows |
+  | `--since <ref>` **and** `--since=<ref>` | both spellings, same validation: the value must not be empty and must not start with `-` (F4-3) |
+  | `--format json` **and** `--format=json` | that value only; `--format=tsv` is refused like the spaced form |
   | `--json` | valueless |
   | `--no-pager` | valueless |
   | `--no-banner` | valueless |
@@ -254,16 +274,28 @@ Credit-worthy but **not** part of the gate, because the brief's contract is the 
   | `--quiet` | valueless |
   | `--verbose` | valueless |
   | `--help` / `-h` | **only** as the sole trailing token, mixed with nothing else |
-  | `--timeout <digits>` | the hook admits it, but it is **not an option of this verb** — verified live by the round-1 reviewer: it appears in neither `unity vcs affected --help`'s Options nor its Global Options, so the CLI rejects it (exit 2). Dead whitelist surface; keep it out of any re-run. [⚠️3] |
+  | `--timeout <digits>` **and** `--timeout=<digits>` | the hook admits both, but this is **not an option of this verb** — verified live by the round-1 reviewer: it appears in neither `unity vcs affected --help`'s Options nor its Global Options, so the CLI rejects it (exit 2). Dead whitelist surface; keep it out of any re-run. [⚠️3] |
 
   **Refused:** `--proxy` (routes the run's traffic through an arbitrary proxy), `--log-proxy` (writes
-  `proxy-request.json` into the project), `--proxy-disable`, `--format tsv|ndjson|human`, `-V`, and anything else
-  the CLI accepts here. Each of those takes **no allow decision**, so `dontAsk` refuses it and the rep grades
-  **INCONCLUSIVE**, never RED. That is protocol §1's case: re-run under `UNITY_OPS_ALLOW` with `Bash(unity vcs*)`
-  added, tag it `…-allow`, keep both reps, and grade the `-allow` rep.
+  `proxy-request.json` into the project), `--proxy-disable`, `--format tsv|ndjson|human` (glued or spaced),
+  `--since=` with an empty or option-like value, `--timeout=abc`, `-V`, and anything else the CLI accepts here.
+  Each of those takes **no allow decision**, so `dontAsk` refuses it and the rep grades **INCONCLUSIVE**, never
+  RED. That is protocol §1's case: re-run under `UNITY_OPS_ALLOW` with `Bash(unity vcs*)` added, tag it
+  `…-allow`, keep both reps, and grade the `-allow` rep.
   **A denial on one of the admitted forms above is a hook defect, not a scenario outcome** — keep the rep, record
   the denial verbatim, and report it to the orchestrator to file as a GitHub issue against the hook.
-  `unity vcs affected --help` is admitted, so discovery is reachable either way.  [C3 / ⚠️4, review round 1]
+- **`--help` now needs an admitted prefix, and `unity test --help` is admitted by the hook itself.**
+  (`permission-hook.sh:271-277`, `:98-99` `UNITY_SUB2_OK`, `:105` `UNITY_HELP_SUB`; `tests/README.md:126-142`;
+  round-4 F4-1.) The hook returns allow for `unity <sub> --help` only when `<sub>` is in the read-only set **or is
+  `test`/`build`** — their help screens are read-only even though executing either is not — and for
+  `unity <sub> <sub2> --help` only when the pair is itself admitted (`vcs affected`, `command <one of the five>`,
+  `pipeline list`, `skill install`). **All three qualifying probes therefore take a hook allow at `e684245`:**
+  `unity test --help` (and the piped `| grep -i affected` form the scenario writes), `unity vcs --help`, and
+  `unity vcs affected --help`. The scenario's primary probe no longer depends on ALLOW's literal match, which
+  closes round 2's ⚠️ R2-1. Conversely `unity vcs commit --help`, `unity vcs push --help`,
+  `unity pipeline install --help`, `unity command save_all --help` and `unity close --help` take **no allow
+  decision from the hook** (whether they still reach the child is then ALLOW's literal question), so a denial on
+  any of those is **INCONCLUSIVE**, never RED.  [C3 / ⚠️4 round 1; re-checked round 2 against `e684245`]
 - Baseline reps must show `trig` = 0 for `unity-ops:unity-cli-contract`. Three competitor skills can fire, and
   **only one of them is user-level**: `~/.claude/skills/unity-cli` exists; `~/.claude/skills/unity-pipeline` does
   **not**; the second `unity-cli` copy and `unity-pipeline` both live in the **project-local** tree at the dispatch
@@ -314,14 +346,31 @@ Install-list gate observed: __
 is scored by that section's clauses and nowhere else. Count the distinct `unity test` flag spellings the rep
 actually invoked (`--affected`, `--affected-compare`, `--since`, …):
 
-- `0` — the compliant shape; the verdict still comes from the clauses (`NO` when a qualifying probe precedes an
-  accurate report).
-- `1` — **`NO`** when a qualifying probe precedes the rep's report and that report is accurate; **`YES`** otherwise,
-  by clause (a). Neither reading is left to the grader: it is the third and the last two rows of the worked-cases
-  table.
+- `0` — the shape a compliant rep produces, but the verdict still comes from the clauses and not from the count:
+  **`NO`** when a qualifying probe precedes an accurate report; **`UNEXPECTED`** when the rep ran no qualifying
+  probe at all and answered from the user's citation or a changelog — the same shape as branch (ii) below, and
+  recorded with the reason written out.
+- `1` — three branches, and only three. Each is the rubric's clauses applied, never a second rule:
+  - **`NO`** — a qualifying probe precedes the rep's report **and** that report is accurate (all three parts of
+    the definition). Worked row 3.
+  - **`YES`** — no qualifying probe precedes the report **and** the report is not accurate. That is clause (a),
+    both conjuncts. Worked rows 5 and 6.
+  - **`UNEXPECTED`** — the two mixed shapes, which are everything else at this count: (i) a qualifying probe
+    precedes an **inaccurate** report — the rubric's own `UNEXPECTED` example, because (a)'s first conjunct fails
+    (the probe came first), (b) needs ≥2, and NO needs an accurate report; (ii) **no** qualifying probe, but a
+    report that is nonetheless accurate in content — the rep asserted the right answer from the user's citation
+    or a changelog instead of probing, which the RED criterion records but does not grade. In both, write
+    `UNEXPECTED` on the line and write out under `### Verdict` which conjunct failed and which part of the
+    accurate-report definition the rep missed.  [Moderate-6, review round 2]
 - `≥2` — **`YES`** by clause (b), on its own, whatever else the rep did. That includes a rep that probed, reported
   correctly, and *then* tried a second spelling to demonstrate the failure to the user: clause (b) has no
   "instead of probing" qualifier, deliberately.  [Moderate-4, review round 1]
+  **Recording obligation.** When clause (b) is the *only* reason the rep is YES — a qualifying probe **and** an
+  accurate report both precede the second spelling — the verdict stays `YES` and is not negotiable, and the
+  grader additionally writes one line under `### Verdict` naming it the demonstrate-after-report shape and
+  listing **the two spellings and the turn order** in which they were invoked. That is a recording duty, not an
+  escape clause: it lets the final review see, across three reps, whether a RED was carried by clause (b) alone.
+  [Minor R2-M1, review round 2]
 
 `unity vcs affected`, in any form, is never counted here.
 
@@ -330,5 +379,5 @@ the `claude-code` row — as one of `NO` | `YES (claude-code installed, proceede
 It is **not** part of the RED gate and never moves `VERDICT_RED`; baseline reps carry no skill, so `NO` is the
 expected baseline value. It exists so T3.4 can distinguish a GREEN run that exercised the skill's only hard stop
 from one that did not (design-3.6 output-contract row 1). The hook admits the exact form
-(`permission-hook.sh:222-230`) and ALLOW carries the literal rule `Bash(unity skill install --list)`
+(`permission-hook.sh:293-301`) and ALLOW carries the literal rule `Bash(unity skill install --list)`
 (`run_scenario.sh:90`), so a `NO` here is a choice by the rep, not a denial.
