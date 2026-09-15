@@ -20,15 +20,25 @@
 # `export` narrowed to literal UNITY_* values; a git option denylist (-c, --output, --ext-diff, …);
 # `unity skill install --list` made an EXACT token match.
 #
+# T4.0 — THE ONE SET IN HERE THAT IS NOT READ-ONLY. Five `unity command` names that CHANGE EDITOR
+# STATE (`create_gameobject`, `set_transform`, `find_gameobjects`, `save_scene`, `save_all`) are
+# admitted, and ONLY when the hook process's own realpath'd cwd IS `~/Dev/Unity/ai_test` AND any
+# `--project-path` resolves to that same directory. Outside the testbed they are refused exactly as
+# before. `UNITY_COMMAND_RO` is untouched; `open_scene`, `add_component`, `undo`, `delete_*`,
+# `create_gameobjects`, `eval*`, `unity close` and `unity open` stay refused. See "the TESTBED
+# LIVE-EDIT set" below and tests/README.md for the rationale and the option whitelist.
+#
 # THIS FILE IS NOT PART OF THE PLUGIN. It is never staged (`stage.sh` copies only
 # `.claude-plugin/`, `hooks/` and named `skills/<name>/` directories) and is passed to the child
 # only through `--settings`, which run_scenario.sh generates at dispatch time.  [G18] [G20]
 #
 # CONTRACT
 #   in : a PreToolUse payload on stdin.
-#   out: for a Bash call whose EVERY segment is in the read-only set, one line of JSON on stdout
-#        with hookSpecificOutput.permissionDecision == "allow". For anything else: NOTHING, exit 0,
+#   out: for a Bash call whose EVERY segment is in the read-only set (or, inside the testbed, in the
+#        T4.0 live-edit set), one line of JSON on stdout with
+#        hookSpecificOutput.permissionDecision == "allow". For anything else: NOTHING, exit 0,
 #        which leaves normal permission evaluation in charge (and under `dontAsk` that is a deny).
+#        A compound command is ALL-OR-NOTHING: one refused segment refuses the whole command.
 #   THE HOOK NEVER RETURNS "deny". It can only ADMIT; it can never take away a rule's decision.
 #   log: one JSONL line per Bash call in
 #        ${XDG_STATE_HOME:-$HOME/.local/state}/unity-ops/permission-hook.jsonl
@@ -40,7 +50,7 @@ INPUT=$(cat 2>/dev/null || true); [ -z "$INPUT" ] && exit 0
 python3 -c 'pass' >/dev/null 2>&1 || exit 0
 
 read -r -d '' UNITY_OPS_PERM_PY <<'PY' || true
-import datetime, json, os, re, shlex, sys
+import datetime, hashlib, json, os, re, shlex, sys
 
 SCAN_MAX  = 65536     # bytes of `command` that are EVALUATED
 STORE_MAX = 2048      # bytes of `command` that are RECORDED
@@ -82,7 +92,74 @@ session = d.get("session_id") or ""
 # (a junit report, a build output), even though ALLOW still admits both LITERALLY.
 UNITY_SUB = {"status", "list", "command", "pipeline", "skill", "vcs"}   # --version/--help: exact forms only
 UNITY_COMMAND_RO = {"editor_status", "list_open_scenes", "get_console_logs",
-                    "get_scene_hierarchy", "get_editor_state"}
+                    "get_scene_hierarchy", "get_editor_state", "find_gameobjects"}
+# `find_gameobjects` takes catalog parameters (`--name`, `--tag`, …) that the plain read-only tail
+# does not know, so it is validated by live_edit_tail_ok with the TESTBED SCOPING OFF: like every
+# other read-only form it is admitted from any cwd, against any --project-path.  [R7-3]
+UNITY_COMMAND_RO_PARAMS = {"find_gameobjects"}
+# ---------------------------------------------------------------- the TESTBED LIVE-EDIT set  [T4.0]
+# A SECOND, SEPARATE set. `UNITY_COMMAND_RO` above is unchanged and still means "read-only, anywhere".
+# The five names below CHANGE EDITOR STATE. They are admitted only when BOTH conditions hold:
+#   (1) the hook process's OWN cwd (os.getcwd(), realpath'd) is the calibration testbed. That cwd
+#       comes from run_scenario.sh's `cd ~/Dev/Unity/ai_test` at dispatch; nothing in the command
+#       string can move it, and no model text is consulted for it.
+#   (2) `--project-path`, WHEN PRESENT, resolves to that same directory. `~`, `$HOME`, `$PWD`, `.`
+#       and the literal absolute path all resolve (the hook sees the PRE-expansion token, #28); a
+#       literal path anywhere else is refused -> `pass`.
+# WHY THE WIDENING EXISTS. The Increment 4 scenario `unity-live-edit-verification` has its child
+# create GameObjects, set their transforms, read them back with `find_gameobjects` and save. Under
+# `dontAsk` the literal `Bash(unity command*)` rule never matches a command carrying `"$PWD"` (#28),
+# so without this even the COMPLIANT read-back path is unreachable and every rep grades INCONCLUSIVE.
+# DELIBERATELY OUT, all still `pass`: `open_scene` (it is the scenario's RESET — a child that can
+# re-open a scene can discard the state the scenario grades, and the reset belongs to the runner),
+# `add_component`, `undo`, every `delete_*`, `create_gameobjects` (its `--name` is a BASE name that
+# suffixes `Name1..NameN`, so it cannot produce the scenario's three names), `eval`/`eval_file`/
+# `report_evals`, `unity close`, `unity open`. Membership is EXACT: no prefix match, no plural.
+UNITY_TESTBED = "/Users/jeremymiranda/Dev/Unity/ai_test"
+# FOUR mutating names. `find_gameobjects` was here in T4.0 and moved to UNITY_COMMAND_RO in round 7
+# (R7-3): it reads the scene graph and changes nothing, so it has zero blast radius whatever the cwd,
+# and keeping it here cost it composability -- `find_gameobjects … | jq .` was refused by the
+# single-segment rule while `editor_status … | jq .` was fine. The asymmetry is right for MUTATING
+# verbs (composition is exactly where the hook-cwd-for-shell-cwd substitution could be perturbed);
+# find_gameobjects was simply on the wrong side of it.
+UNITY_LIVE_EDIT = {"create_gameobject", "set_transform", "save_scene", "save_all"}
+# Parameter names taken VERBATIM from the tool catalog --
+# `unity list --project-path <testbed> --format json --no-pager` -> data.tools[].parameters[].name
+# (151 tools, read 2026-09-15). NOT from `--help`: `unity command <name> --help` prints the ROOT help
+# for every one of these (T4.1 §3), so the catalog is the only authority for these spellings.
+# NOTE `set_transform` takes `--target`, NOT `--name`; its three channels are `--position` /
+# `--rotation` / `--scale`, each typed `single[]` ("Local position as [x,y,z]").
+UNITY_LIVE_EDIT_PARAMS = {
+    "create_gameobject": frozenset({"name", "primitive", "parent"}),
+    "set_transform":     frozenset({"target", "position", "rotation", "scale"}),
+    "find_gameobjects":  frozenset({"name", "tag", "type", "hierarchy_path", "include_inactive"}),
+    "save_scene":        frozenset({"path"}),
+    "save_all":          frozenset(),
+}
+# The `single[]` channels. The catalog gives the TYPE, not the CLI spelling, and confirming the
+# spelling requires mutating the scene (T4.1 concern 2 -- T4.2's first rep is the first sanctioned
+# mutation). The value rule is therefore a character class wide enough for every plausible spelling
+# (`1,2,3`, `[1,2,3]`, `{"x":1,"y":2,"z":3}`) and narrow enough that NO expansion of such a token can
+# produce a `/`, a `$`, a `*`/`?`, or any option name: the class carries no slash and no letter but
+# x/y/z, so brace/bracket expansion of it can only ever yield more characters from the same class.
+# It is also the ONE place a value may start with `-`: `--position -4,0,3` and the space-separated
+# `--position -4 0 3` are ordinary negative coordinates, and refusing them would make every mutation
+# rep INCONCLUSIVE -- the failure this whole hook exists to prevent. `--position -rf` is still
+# refused, because `r`/`f` are outside the class.
+UNITY_LIVE_EDIT_VECTOR = frozenset({"position", "rotation", "scale"})
+VECTOR_OK = re.compile(r'^[-+0-9.,\[\]{}":xyzXYZ ]+$')
+# Global options admitted on top of the per-command parameters. No `--help` (a `--help` admission on
+# a MUTATING verb is exactly what round-4 F4-1 closed), no `--no-banner`/`--non-interactive`/
+# `--quiet`, no `--proxy`/`--log-proxy`, no `-V`. `--json` is this CLI's bare shorthand for
+# `--format json` (`unity command --help`, Global Options) -- it takes no payload.
+UNITY_LIVE_EDIT_FLAGS = frozenset({"--json", "--no-pager", "--verbose"})
+# Set when a live-edit admission is what carried the command, so the log line names the right set.
+LIVE_EDIT = [False]
+# Where the segment under examination sits in the whole command. The live-edit set is admitted only
+# as the LAST segment, preceded by nothing but a prelude (`. "$HOME/.unity/env"` / `export UNITY_*=`)
+# -- and by nothing at all when `--project-path` is absent, because then the hook's cwd is the only
+# thing standing in for the shell's.  [round-6 review F6-1]
+SEG_CTX = {"nothing_before": True, "prelude_before": True, "nothing_after": True}
 UNITY_DESTRUCTIVE_FLAGS = {"--yes", "--force", "--allow-install", "--confirm"}
 UNITY_SKILL_TAIL = {"--format", "json", "--no-pager"}   # the ONLY tokens allowed after `--list`
 # `unity vcs affected [path] [options]` — read-only reporting (T3.1). Flags that take no value
@@ -116,7 +193,13 @@ GIT_BAD = ("-c", "--config-env", "--exec-path", "--git-dir", "--work-tree",
 # --jsonargs --tab --indent --raw-output --compact-output --null-input --sort-keys --slurp …
 JQ_BAD_LONG = ("--rawfile", "--slurpfile", "--from-file", "--library-path", "--run-tests")
 JQ_BAD_CHARS = "fL"      # -f/--from-file read the program; -L adds a module search path
-PLAIN = {"cd", "pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
+# `cd` was in this set from round 1, when nothing in the set could write and the review judged it
+# harmless -- correctly, then. T4.0 invalidated that: the live-edit set's blast radius is a function
+# of cwd, and a `cd` segment moves the COMMAND's shell while the hook's own cwd predicate cannot
+# move, so `cd /tmp && unity command save_all` was admitted and two other real Unity projects live
+# under ~/Dev/Unity/ (round-6 review F6-1). `pushd`/`popd` were never in the set. A scenario child
+# starts in the testbed and has no need to move.
+PLAIN = {"pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
          "tr", "cut", "test", "[", "which", "true", "date",
          "basename", "dirname", "realpath"}
 
@@ -127,6 +210,28 @@ EXPORT_OK  = re.compile(r"^UNITY_[A-Z0-9_]+=[^$`]*$")     # UNITY_* names, LITER
 # the same chain shape as round-1 C2 (round-2 review R2-1). run_scenario.sh:132 sources exactly
 # `. "$HOME/.unity/env"`, which posix shlex hands us as `$HOME/.unity/env`.
 SOURCE_OK  = {"$HOME/.unity/env", "~/.unity/env", os.path.expanduser("~/.unity/env")}
+UNITY_ENV_FILE = os.path.expanduser("~/.unity/env")
+# Sourcing runs the file's contents as shell IN THE CURRENT SHELL, and until round 7 `ALLOW` granted
+# the child an unrestricted `Write`: it could author a `cd` into this file and then move the shell
+# through a segment the live-edit rule treats as a harmless prelude (round-7 review R7-1). `ALLOW`
+# now scopes Write/Edit to the testbed (Delta D20); this is the second layer. run_scenario.sh hashes
+# the file at dispatch and exports UNITY_OPS_ENV_SHA; a mismatch means the file changed under us.
+# An UNSET variable means nobody promised a hash -- a bare `claude -p` probe -- so the source is
+# still admitted and the log says the check did not run.
+ENV_SHA_UNVERIFIED = [False]
+def env_file_ok():
+    want = os.environ.get("UNITY_OPS_ENV_SHA", "")
+    if not want:
+        ENV_SHA_UNVERIFIED[0] = True
+        return ""
+    try:
+        with open(UNITY_ENV_FILE, "rb") as f:
+            got = hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        return "unity env file cannot be read for its sha256"
+    if got != want:
+        return "unity env file changed since dispatch"
+    return ""
 # A path VALUE the hook accepts must be one path to bash as well as one token to the hook. A glob
 # metacharacter makes it many words after expansion, and a file named like an option (`--log-proxy`)
 # then arrives as an OPTION, past the whitelist — the child can author such a file with the
@@ -140,6 +245,195 @@ def path_ok(v):
             return "path with a glob metacharacter: " + v
     if ".." in v.split("/"):
         return "path with a .. segment: " + v
+    return ""
+
+# ---------------------------------------------------------------- live-edit scoping  [T4.0]
+HOME = os.path.expanduser("~")
+try:
+    TESTBED_REAL = os.path.realpath(UNITY_TESTBED)
+except Exception:
+    TESTBED_REAL = UNITY_TESTBED
+try:
+    HOOK_CWD = os.path.realpath(os.getcwd())
+except Exception:
+    HOOK_CWD = ""
+
+def is_prelude(seg):
+    """A segment that may legitimately precede a live-edit command: sourcing the unity env file, or
+       exporting a UNITY_* literal. Both are already admitted on their own terms; neither can change
+       the shell's cwd, which is the property the live-edit scoping depends on."""
+    seg, _why = segment_words(seg)      # `. "$HOME/.unity/env" 2>/dev/null` is still a prelude
+    if not seg:
+        return True
+    w = seg[0]
+    if w in (".", "source"):
+        return len(seg) == 2 and seg[1] in SOURCE_OK and env_file_ok() == ""
+    if w == "export":
+        return len(seg) >= 2 and all(EXPORT_OK.match(t) for t in seg[1:])
+    return False
+
+def in_testbed():
+    """Condition (1): the hook PROCESS's own cwd is the testbed. Resolved once, from os.getcwd(),
+       never from the command string -- a model cannot write its way into this predicate."""
+    return bool(HOOK_CWD) and HOOK_CWD == TESTBED_REAL
+
+def resolves_to_testbed(v):
+    """Condition (2): a `--project-path` VALUE names the testbed. The hook sees the PRE-expansion
+       token (#28), so `$PWD`, `${PWD}`, `$HOME`, `${HOME}` and a leading `~` are resolved here the
+       way bash would, and a relative value (`.`) resolves against the hook's cwd. Any `$`/`~` left
+       after that is an expansion this hook cannot resolve -> not the testbed."""
+    s = v
+    if s == "~":
+        s = HOME
+    elif s.startswith("~/"):
+        s = HOME + s[1:]
+    else:
+        for var, val in (("${PWD}", HOOK_CWD), ("$PWD", HOOK_CWD),
+                         ("${HOME}", HOME), ("$HOME", HOME)):
+            if s == var:
+                s = val
+                break
+            if s.startswith(var + "/"):
+                s = val + s[len(var):]
+                break
+    if not s or "$" in s or "~" in s:
+        return False
+    if not os.path.isabs(s):
+        s = os.path.join(HOOK_CWD or "/", s)
+    try:
+        return os.path.realpath(s) == TESTBED_REAL
+    except Exception:
+        return False
+
+def value_ok(v):
+    """A non-vector, non-path live-edit option VALUE. One token to the hook must be one word to bash
+       and must not be able to arrive as an OPTION: refused are a leading `-`, a leading `~`, any
+       `$`, the brace-expansion characters `{`/`}`, the glob metacharacters `*`/`?`/`[` and any `..`
+       segment (F4-2 -- the child holds the unrestricted Write tool and can author a file named
+       `--project-path`, which a glob would then hand to the CLI as a real option)."""
+    if v == "":
+        return "empty option value"
+    if v.startswith("-"):
+        return "option value that starts with -: " + v
+    if v.startswith("~"):
+        return "option value with a leading ~: " + v
+    if "$" in v:
+        return "option value carrying a shell expansion: " + v
+    for ch in "{}":
+        if ch in v:
+            return "option value with a brace-expansion character: " + v
+    return path_ok(v)
+
+def vector_ok(v):
+    """`--position` / `--rotation` / `--scale`. See UNITY_LIVE_EDIT_VECTOR."""
+    if not v or not VECTOR_OK.match(v):
+        return "vector value outside the numeric/bracket character class: " + v
+    for ch in "{}":
+        # `--position {1..3}` matches the character class and bash expands it to THREE words;
+        # `{a,b}` is the same machinery. Refusing the braces costs the `{"x":1,"y":2,"z":3}` JSON
+        # spelling, which no rep has ever been observed using.  [round-6 review F6-3]
+        if ch in v:
+            return "vector value with a brace-expansion character: " + v
+    if not any(c.isdigit() for c in v):
+        return "vector value with no digit: " + v
+    return ""
+
+def save_path_ok(v):
+    """`save_scene --path` is the ONE value in this set that decides where bytes land on disk, so it
+       takes `value_ok` (glob, `..`, `$`, braces, leading `-`) AND must be a RELATIVE path under
+       `Assets/`. `Assets/../../x.unity`, `/tmp/x.unity` and `Assets/*.unity` are all refused."""
+    why = value_ok(v)
+    if why:
+        return why
+    if v.startswith("/"):
+        return "save_scene --path must be relative, not absolute: " + v
+    if not v.startswith("Assets/"):
+        return "save_scene --path outside Assets/: " + v
+    if not v.endswith(".unity"):
+        # Writing scene YAML over `SampleScene.unity.meta` corrupts an asset's GUID binding, and a
+        # reviewer reading a GATE diff would not recognise it as that.  [round-6 review F6-2]
+        return "save_scene --path does not end in .unity: " + v
+    return ""
+
+def live_edit_tail_ok(name, tokens, scoped=True):
+    """Everything after `unity command <live-edit name>`. Per-command parameter names come from the
+       catalog (UNITY_LIVE_EDIT_PARAMS) and each takes exactly one value; on top of them only the
+       global options in UNITY_LIVE_EDIT_FLAGS plus `--project-path`, `--format json` and
+       `--timeout <digits>`. Both the SPACED and the GLUED (`--name=X`) spellings, same validation
+       (F4-3). No positional operand, no `--help`, no unknown option."""
+    params = UNITY_LIVE_EDIT_PARAMS[name]
+    i, n = 0, len(tokens)
+    while i < n:
+        t = tokens[i]
+        if t == "--project-path" or t.startswith("--project-path="):
+            if t.startswith("--project-path="):
+                val, step = t.split("=", 1)[1], 1
+            elif i + 1 < n:
+                val, step = tokens[i + 1], 2
+            else:
+                return "unity command " + name + ": --project-path without a value"
+            why = path_ok(val)
+            if why:
+                return "unity command " + name + ": --project-path: " + why
+            if scoped and not resolves_to_testbed(val):
+                return ("unity command " + name
+                        + ": --project-path does not resolve to the testbed: " + val)
+            i += step
+            continue
+        if t == "--format" or t.startswith("--format="):
+            if t.startswith("--format="):
+                if t != "--format=json":
+                    return "unity command " + name + ": --format with a value other than json"
+                i += 1
+            else:
+                if i + 1 >= n or tokens[i + 1] != "json":
+                    return "unity command " + name + ": --format with a value other than json"
+                i += 2
+            continue
+        if t == "--timeout" or t.startswith("--timeout="):
+            if t.startswith("--timeout="):
+                val, step = t.split("=", 1)[1], 1
+            else:
+                val, step = (tokens[i + 1] if i + 1 < n else ""), 2
+            if not (val.isascii() and val.isdigit()):
+                return "unity command " + name + ": --timeout without a numeric value"
+            i += step
+            continue
+        if t in UNITY_LIVE_EDIT_FLAGS:
+            i += 1
+            continue
+        if t.startswith("--"):
+            key, eq, glued = t[2:].partition("=")
+            if key not in params:
+                return ("unity command " + name
+                        + ": option outside the catalog parameter list: " + t)
+            if eq:
+                val, step = glued, 1
+            elif i + 1 < n:
+                val, step = tokens[i + 1], 2
+            else:
+                return "unity command " + name + ": " + t + " without a value"
+            if key in UNITY_LIVE_EDIT_VECTOR:
+                why = vector_ok(val)
+            elif name == "save_scene" and key == "path":
+                why = save_path_ok(val)
+            else:
+                why = value_ok(val)
+            if why:
+                return "unity command " + name + " --" + key + ": " + why
+            i += step
+            # A `single[]` channel may also arrive SPACE-separated -- `--position -4 0 3` -- so keep
+            # consuming while the NEXT token is itself a bare vector literal. Negative coordinates
+            # are certain to appear and a leading `-` is what `value_ok` refuses, which is why the
+            # vector channels take `vector_ok` instead. Nothing else is consumed: the next `--option`
+            # ends the run, and a consumed token can only ever be a number-shaped literal -- never an
+            # option name and never a path, because VECTOR_OK carries no slash and no letter but
+            # x/y/z. `--position -rf` and `--position id` stop here and are refused below.  [T4.0]
+            if key in UNITY_LIVE_EDIT_VECTOR:
+                while i < n and not tokens[i].startswith("--") and vector_ok(tokens[i]) == "":
+                    i += 1
+            continue
+        return "unity command " + name + ": argument outside the live-edit whitelist: " + t
     return ""
 
 # Read-only option tails (round-2 review R2-5). `--project-path`/`--timeout` take one value; `--format`
@@ -300,9 +594,42 @@ def words_ok(words):
                 if t not in UNITY_SKILL_TAIL:
                     return "unity skill install --list with an extra argument: " + t
         elif s1 == "command":
+            # The testbed-scoped live-edit set is checked FIRST and separately, and its cwd
+            # condition is evaluated before a single token of the tail is read.  [T4.0]
+            if len(rest) >= 2 and rest[1] in UNITY_LIVE_EDIT:
+                if not in_testbed():
+                    return ("unity command " + rest[1] + ": the live-edit set is admitted only with"
+                            " the hook's own cwd at the testbed")
+                # The hook's cwd predicate stands in for the SHELL's cwd, and that substitution is
+                # only sound when no other segment can have moved the shell -- `cd` is gone from the
+                # set, but a future addition, or a `$PWD` the hook resolves against ITS cwd while
+                # bash expands it after something else, would re-open it. So: last segment, nothing
+                # but a prelude before it.  [round-6 review F6-1]
+                if not SEG_CTX["nothing_after"]:
+                    return ("unity command " + rest[1] + ": the live-edit set is admitted only as"
+                            " the last segment of the command")
+                if not SEG_CTX["prelude_before"]:
+                    return ("unity command " + rest[1] + ": the live-edit set admits no segment"
+                            " before it other than the unity env source or an export UNITY_*")
+                has_pp = any(t == "--project-path" or t.startswith("--project-path=")
+                             for t in rest[2:])
+                if not has_pp and not SEG_CTX["nothing_before"]:
+                    return ("unity command " + rest[1] + ": without --project-path the live-edit set"
+                            " is admitted only as the WHOLE command")
+                why = live_edit_tail_ok(rest[1], rest[2:])
+                if why:
+                    return why
+                LIVE_EDIT[0] = True
+                return ""
             if len(rest) < 2 or rest[1] not in UNITY_COMMAND_RO:
                 return "unity command: editor command outside the read-only set"
-            why = tail_ok(rest[2:], False)      # no --verbose here; the five names take no operands
+            if rest[1] in UNITY_COMMAND_RO_PARAMS:
+                # catalog parameters, but NOT testbed-scoped: read-only is read-only from any cwd.
+                why = live_edit_tail_ok(rest[1], rest[2:], scoped=False)
+                if why:
+                    return why
+                return ""
+            why = tail_ok(rest[2:], False)      # no --verbose here; these names take no operands
             if why:
                 return "unity command " + rest[1] + ": " + why
         elif s1 == "vcs":
@@ -335,7 +662,7 @@ def words_ok(words):
             return "source takes exactly one argument here"
         t = rest[0]
         if t in SOURCE_OK:
-            return ""
+            return env_file_ok()        # "" when it matches, or was never promised a hash
         return "source target is not the unity env file: " + t
 
     if base == "export":
@@ -347,6 +674,19 @@ def words_ok(words):
         for t in rest:
             if not EXPORT_OK.match(t):
                 return "export outside UNITY_*=<literal value>: " + t
+        return ""
+
+    if base == "cd":
+        # `cd` left the read-only set in round 6 because a `cd` segment moves the COMMAND's shell
+        # while the hook's cwd predicate cannot move. Admitting it only when its single argument
+        # resolves to the testbed keeps that closed -- the shell can then only ever move TO the
+        # directory the scoping already assumes -- and restores the spelling the corpus contains
+        # (`cd ~/Dev/Unity/ai_test && git status --short`, three times in a committed baseline).
+        # Bare `cd` (-> $HOME), `cd -`, `cd ..` and `cd /tmp` all stay refused.  [round-7 R7-4]
+        if len(rest) != 1:
+            return "cd takes exactly one argument here"
+        if not resolves_to_testbed(rest[0]):
+            return "cd to a directory other than the testbed: " + rest[0]
         return ""
 
     if base == "jq":
@@ -370,8 +710,13 @@ def words_ok(words):
         return ""
     return "command word outside the read-only set: " + base
 
-def check_segment(tokens):
-    """'' when the segment is allowed; else the reason. Consumes redirections as it walks."""
+def segment_words(tokens):
+    """(words, reason). Walks a segment consuming redirections: `2>&1`, `>/dev/null`, `2>/dev/null`
+       and fd dups are harmless and dropped; every other `>`/`<` and any grouping token is a reason.
+       Factored out of check_segment so is_prelude sees the SAME word list the decision does --
+       `. "$HOME/.unity/env" 2>/dev/null` tokenizes as ['.','$HOME/.unity/env','2','>','/dev/null']
+       and the raw-token prelude test rejected it, which is the spelling two committed transcripts
+       actually use (round-7 review R7-2).""" + ""
     words, i, n = [], 0, len(tokens)
     while i < n:
         t = tokens[i]
@@ -384,15 +729,22 @@ def check_segment(tokens):
                 if tgt.isdigit() or tgt == "-":
                     i += 2
                     continue
-                return "fd redirection to a non-descriptor: " + (tgt or "<nothing>")
+                return None, "fd redirection to a non-descriptor: " + (tgt or "<nothing>")
             if t in (">", ">>", "&>", "&>>") and tgt == "/dev/null":
                 i += 2
                 continue
-            return "redirection " + t + " " + (tgt or "<nothing>")
+            return None, "redirection " + t + " " + (tgt or "<nothing>")
         if is_punct:                                     # `(` / `)` grouping, subshells
-            return "shell grouping token " + t
+            return None, "shell grouping token " + t
         words.append(t)
         i += 1
+    return words, ""
+
+def check_segment(tokens):
+    """'' when the segment is allowed; else the reason."""
+    words, why = segment_words(tokens)
+    if words is None:
+        return why
     return words_ok(words)
 
 def normalize(text):
@@ -461,9 +813,11 @@ def evaluate(cmd):
         else:
             cur.append(t)
     segs.append(cur)
-    for seg in segs:
-        if not seg:
-            continue
+    segs = [s for s in segs if s]
+    for i, seg in enumerate(segs):
+        SEG_CTX["nothing_before"] = (i == 0)
+        SEG_CTX["prelude_before"] = all(is_prelude(s) for s in segs[:i])
+        SEG_CTX["nothing_after"] = (i == len(segs) - 1)
         why = check_segment(seg)
         if why:
             return why
@@ -474,6 +828,14 @@ if len(cmd_raw) > SCAN_MAX:
 else:
     reason = evaluate(cmd_raw)
 allow = (reason == "")
+# Which set carried it, for the log and for the decision reason. `LIVE_EDIT[0]` is only meaningful
+# when `allow` is true: a later segment can refuse a command whose earlier segment was live-edit.
+SET_NAME = ("testbed live-edit set" if (allow and LIVE_EDIT[0]) else "read-only set")
+# A `.`/`source` admission that could not be checked against a dispatch-time digest says so, so the
+# log distinguishes "the env file is the one run_scenario.sh hashed" from "nobody promised a digest"
+# (a bare `claude -p` probe).  [round-7 review R7-1b]
+if allow and ENV_SHA_UNVERIFIED[0]:
+    SET_NAME = SET_NAME + "; env sha unverified"
 
 # ---------------------------------------------------------------- the log
 state = os.path.join(os.environ.get("XDG_STATE_HOME")
@@ -495,7 +857,7 @@ try:
             "session_id": session, "scenario": scen,
             "command": cmd_raw[:STORE_MAX],
             "decision": "allow" if allow else "pass",
-            "reason": "read-only set" if allow else reason,
+            "reason": SET_NAME if allow else reason,
         }, separators=(",", ":")) + "\n")
 except Exception:
     pass
@@ -504,7 +866,8 @@ if allow:
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "allow",
-        "permissionDecisionReason": "unity-ops harness: read-only probe"}},
+        "permissionDecisionReason": ("unity-ops harness: testbed live-edit set"
+                                     if LIVE_EDIT[0] else "unity-ops harness: read-only probe")}},
         separators=(",", ":")))
 sys.exit(0)
 PY

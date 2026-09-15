@@ -84,11 +84,31 @@ if [ -n "${UNITY_OPS_ALLOW:-}" ]; then
 else
   # `Task` is this CLI's subagent tool (2.1.270 lists it in the init envelope, not `Agent`);
   # both are named so the envelope permits a subagent dispatch whichever the build exposes.  [T1.3]
-  ALLOW=(Read Grep Glob Write Edit Skill Agent Task \
+  # NO `Bash(unity command*)`.  [T4.0 round 6] [#38 branch (a)] [DESIGN.md Delta D19]
+  # That literal rule admitted ANY editor command -- `add_component`, `delete_gameobject`, `eval`,
+  # `open_scene` -- spelled with a literal path, from any cwd, against any project, whatever the
+  # permission hook decided. T4.0 did not enlarge that hazard (the literal-path route is unchanged)
+  # but it ACTIVATED it: Increment 4's children issue mutating editor commands as their normal job,
+  # so a child that takes a hook refusal is one "retry with an absolute path" away from the unscoped
+  # route. Removing the rule makes `tests/permission-hook.sh` the SOLE admitter of `unity command`:
+  # the read-only set (UNITY_COMMAND_RO, any cwd) plus the testbed live-edit set (four names, scoped
+  # to ~/Dev/Unity/ai_test, single segment). `Bash(unity test*)`/`Bash(unity build*)` stay --
+  # Increment 6 needs them. Each later increment declares the `unity command` names it needs through
+  # the hook, not here (Increment 7: `recompile`, `recompile_status`, `set_autotick`).
+  # `Write`/`Edit` are PATH-SCOPED to the testbed.  [T4.0 round 7] [R7-1a] [Delta D20]
+  # Unrestricted, they let the child rewrite `$HOME/.unity/env` -- the one file the permission hook
+  # admits as a live-edit PRELUDE -- to contain a `cd`, and then
+  # `. "$HOME/.unity/env" && unity command save_all --project-path "$PWD"` moves the shell while the
+  # hook resolves `$PWD` against its OWN cwd: arbitrary execution, and the T4.0 scoping defeated
+  # through the door the single-segment rule deliberately leaves open. The scenarios that MEASURE
+  # hand-edits (SampleScene.unity) stay measurable -- the testbed is inside the scope.
+  ALLOW=(Read Grep Glob Skill Agent Task \
+         "Write(//Users/jeremymiranda/Dev/Unity/ai_test/**)" \
+         "Edit(//Users/jeremymiranda/Dev/Unity/ai_test/**)" \
          "Bash(. *)" "Bash(export *)" "Bash(grep *)" \
          "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
          "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
-         "Bash(unity command*)" "Bash(unity pipeline list*)" "Bash(unity test*)" \
+         "Bash(unity pipeline list*)" "Bash(unity test*)" \
          "Bash(unity build*)" "Bash(git status*)" "Bash(git diff*)" "Bash(git rev-parse*)" \
          "Bash(git -C * status*)" "Bash(git -C * diff*)" "Bash(git -C * rev-parse*)")
 fi
@@ -123,6 +143,15 @@ else
 fi
 # Every scenario child runs on Sonnet unless UNITY_OPS_MODEL overrides it (execution directive, 2026-09-14):
 # a skill that holds Sonnet under pressure holds Opus. Verified: `claude -p --model sonnet` accepted on 2.1.270.
+# --- 4b. [T4.0 round 7] [R7-1b] The child may SOURCE `$HOME/.unity/env` -- the permission hook admits
+#     that one path as a prelude, and sourcing runs the file's contents as shell IN the child's shell.
+#     The file is Jeremy's and lives outside the testbed; `ALLOW` scopes Write/Edit to the testbed
+#     (Delta D20), and this is the second layer: hash the file HERE, at dispatch, and hand the digest
+#     to the child. The hook re-hashes on every `.`/`source` admission and refuses on a mismatch, so a
+#     file rewritten mid-run stops being a prelude. An UNSET variable (a bare `claude -p` probe) means
+#     nobody promised a digest: the hook still admits and logs `env sha unverified`.
+UNITY_OPS_ENV_SHA="$( { shasum -a 256 "$HOME/.unity/env" 2>/dev/null || true; } | awk '{print $1}' )"
+export UNITY_OPS_ENV_SHA
 if [ "${UNITY_OPS_DRYRUN:-0}" = 1 ]; then
   ( exec sleep "${UNITY_OPS_DRYSLEEP:-2}" ) & child=$!
   wait "$child"; RC=$?; child=""
@@ -131,11 +160,13 @@ else
   ( cd ~/Dev/Unity/ai_test && \
     . "$HOME/.unity/env" 2>/dev/null; \
     UNITY_TEST_TIMEOUT=600 UNITY_BUILD_TIMEOUT=1800 UNITY_RUN_TIMEOUT=600 \
+    UNITY_OPS_ENV_SHA="$UNITY_OPS_ENV_SHA" \
     exec claude -p --plugin-dir /tmp/unity-ops-stage --output-format "$FMT" --verbose \
       --model "${UNITY_OPS_MODEL:-sonnet}" \
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
       ${SETTINGS:+--settings "$SETTINGS"} \
       --disallowedTools "Read(//Users/jeremymiranda/.claude/plans/**)" \
+        "Write(//Users/jeremymiranda/.unity/**)" "Edit(//Users/jeremymiranda/.unity/**)" \
       -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!
   wait "$child"; RC=$?; child=""
