@@ -110,7 +110,51 @@ pass	unity status && rm -rf /tmp/unity-ops-z
 pass	ls<NL>rm -rf /tmp/unity-ops-z
 pass	ls # note<NL>rm -rf /tmp/unity-ops-z
 pass	python3 -c 'import os'
+# ---- ROUND-2 REVIEW (R2-1..R2-5) ----
+# R2-1 — `.`/`source` took ANY absolute path ending /.unity/env; the child can Write that file first
+pass	. /tmp/evil/.unity/env
+pass	. "/tmp/evil/.unity/env"
+pass	. /tmp/x/y/z/.unity/env
+pass	source /Users/jeremymiranda/Dev/Unity/ai_test/.unity/env
+pass	. /etc/../tmp/evil/.unity/env
+pass	. ./.unity/env
+# R2-2 — a path-qualified command word was admitted on its basename
+pass	/tmp/evil/git status
+pass	./git status
+pass	../../usr/bin/git status
+pass	/tmp/evil/unity close
+# R2-3 — the jq file-read denylist was bypassable by spelling
+pass	jq -nf /tmp/x
+pass	jq -L /tmp 'include "x"; .'
+pass	jq -L/tmp '.'
+pass	jq --run-tests /tmp/x
+pass	jq --library-path /tmp '.'
+# R2-4 — `--help` short-circuited ahead of the subcommand check
+pass	unity skill --help install /x
+pass	unity --help close
+pass	unity close -h
+# R2-5 — unlimited trailing arguments after a read-only editor command / subcommand
+pass	unity command editor_status extra
+pass	unity command editor_status --json {"a":1}
+pass	unity status --format yaml
+pass	unity list --project-path
+pass	unity command editor_status --timeout abc
+# glued spelling of the git -c bypass
+pass	git -cdiff.external=/bin/sh diff
+# quoting / expansion tricks the round-2 reviewer attacked (must stay pass)
+pass	$'\x72\x6d' -rf /tmp/unity-ops-z
+pass	{rm,-rf,/tmp/unity-ops-z}
+pass	cat <<< "x"
+pass	echo x >& /tmp/unity-ops-o
+pass	git -C /tmp -C /etc status
+pass	git -C
 # ---- the read-only set: these MUST be `allow` ----
+allow	unity -h
+allow	unity --help
+allow	unity skill --help
+allow	unity command editor_status --project-path "$PWD" --format json --no-pager --timeout 5000
+allow	unity list --project-path "$PWD" --format json --no-pager --verbose
+
 allow	unity list --project-path "$PWD" --format json --no-pager 2>&1
 allow	unity pipeline list --format json --no-pager | jq '.data.summary'
 allow	git -C "$PWD" status --porcelain

@@ -80,7 +80,7 @@ session = d.get("session_id") or ""
 # implements it), `sort --compress-program=`, `uniq IN OUT`. A probe uses grep/head/cut/jq or the
 # Grep and Glob tools instead. ALSO ABSENT: `unity test` and `unity build` -- neither is read-only
 # (a junit report, a build output), even though ALLOW still admits both LITERALLY.
-UNITY_SUB = {"--version", "--help", "status", "list", "command", "pipeline", "skill"}
+UNITY_SUB = {"status", "list", "command", "pipeline", "skill"}   # --version/--help: exact forms only
 UNITY_COMMAND_RO = {"editor_status", "list_open_scenes", "get_console_logs",
                     "get_scene_hierarchy", "get_editor_state"}
 UNITY_DESTRUCTIVE_FLAGS = {"--yes", "--force", "--allow-install", "--confirm"}
@@ -92,15 +92,45 @@ GIT_SUB = {"status", "diff", "rev-parse", "log", "show"}
 #   -> invokes the configured external program;  -O/--orderfile -> reads an arbitrary file.
 GIT_BAD = ("-c", "--config-env", "--exec-path", "--git-dir", "--work-tree",
            "--output", "--ext-diff", "--textconv", "-O", "-o", "--orderfile")
-# jq cannot write a file; these read one, and the child is meant to stay on stdin/args.
-JQ_BAD = ("--rawfile", "--slurpfile", "-f", "--from-file")
+# jq cannot write a file, but these READ one, and the child is meant to stay on stdin/args. Matching
+# is per-CHARACTER for short options, because `-nf /tmp/x` clusters `-n` with `-f` and does not start
+# with `-f` (round-2 review R2-3). Survivors: -r -c -e -s -n -S -M -j -a -C --arg --argjson --args
+# --jsonargs --tab --indent --raw-output --compact-output --null-input --sort-keys --slurp …
+JQ_BAD_LONG = ("--rawfile", "--slurpfile", "--from-file", "--library-path", "--run-tests")
+JQ_BAD_CHARS = "fL"      # -f/--from-file read the program; -L adds a module search path
 PLAIN = {"cd", "pwd", "ls", "echo", "printf", "cat", "head", "tail", "grep", "wc",
          "tr", "cut", "test", "[", "which", "true", "date",
          "basename", "dirname", "realpath"}
 
 ASSIGN     = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 EXPORT_OK  = re.compile(r"^UNITY_[A-Z0-9_]+=[^$`]*$")     # UNITY_* names, LITERAL values only
-SOURCE_OK  = {"$HOME/.unity/env", "~/.unity/env"}         # + any ABSOLUTE */.unity/env
+# EXACT matches only. An "absolute path ending /.unity/env" test admitted `. /tmp/evil/.unity/env`,
+# and the child holds the unrestricted Write tool: Write that file, source it, arbitrary execution --
+# the same chain shape as round-1 C2 (round-2 review R2-1). run_scenario.sh:132 sources exactly
+# `. "$HOME/.unity/env"`, which posix shlex hands us as `$HOME/.unity/env`.
+SOURCE_OK  = {"$HOME/.unity/env", "~/.unity/env", os.path.expanduser("~/.unity/env")}
+# Read-only option tails (round-2 review R2-5). `--project-path`/`--timeout` take one value; `--format`
+# takes `json` only; everything else after the subcommand is refused.
+def tail_ok(tokens, verbose_ok):
+    i, n = 0, len(tokens)
+    while i < n:
+        t = tokens[i]
+        if t == "--project-path":
+            if i + 1 >= n:
+                return "--project-path without a value"
+            i += 2; continue
+        if t == "--format":
+            if i + 1 >= n or tokens[i + 1] != "json":
+                return "--format with a value other than json"
+            i += 2; continue
+        if t == "--timeout":
+            if i + 1 >= n or not tokens[i + 1].isdigit():
+                return "--timeout without a numeric value"
+            i += 2; continue
+        if t == "--no-pager" or (verbose_ok and t == "--verbose"):
+            i += 1; continue
+        return "argument outside the read-only option whitelist: " + t
+    return ""
 PUNCT  = "();<>|&"
 
 def words_ok(words):
@@ -113,22 +143,39 @@ def words_ok(words):
     # The harness exports every UNITY_* variable a probe needs before the dispatch.
     if ASSIGN.match(words[0]):
         return "leading NAME=value assignment: " + words[0].split("=", 1)[0]
-    base = words[0].rsplit("/", 1)[-1]
+    # A PATH-QUALIFIED command word is refused outright. Matching on the basename admitted
+    # `/tmp/evil/git status` and `./git status` (round-2 review R2-2): whatever sits at that path is
+    # not the binary this set was reasoned about. `.` (the source builtin) has no slash and is unaffected.
+    if "/" in words[0]:
+        return "command word carries a path: " + words[0]
+    base = words[0]
     rest = words[1:]
 
     if base == "unity":
         if set(rest) & UNITY_DESTRUCTIVE_FLAGS:
             return "unity with an auto-confirm/destructive flag"
-        if "--help" in rest:
-            return ""                           # `unity <anything> --help` only prints help
+        # `--help` must be the LAST token and nothing may follow it: `if "--help" in rest` admitted
+        # `unity skill --help install /x` and `unity --help close` (round-2 review R2-4). ALLOW's rule
+        # `Bash(unity * --help)` has no trailing `*`, so it too matches only commands ENDING in --help.
+        if rest in (["--help"], ["-h"], ["--version"]):
+            return ""
+        if len(rest) in (2, 3) and rest[-1] == "--help":
+            return ""                           # `unity <sub> [<sub2>] --help`
         if not rest:
             return ""                           # bare `unity` prints its own help
         s1 = rest[0]
         if s1 not in UNITY_SUB:
             return "unity subcommand outside the read-only set: " + s1
-        if s1 == "pipeline":
+        if s1 in ("status", "list"):
+            why = tail_ok(rest[1:], True)
+            if why:
+                return "unity " + s1 + ": " + why
+        elif s1 == "pipeline":
             if len(rest) < 2 or rest[1] != "list":
                 return "unity pipeline: only `list` is read-only"
+            why = tail_ok(rest[2:], True)
+            if why:
+                return "unity pipeline list: " + why
         elif s1 == "skill":
             # EXACT token list. ALLOW's rule is the literal `Bash(unity skill install --list)`, which
             # cannot match a command carrying an install target; `unity skill install <t> --list`
@@ -141,6 +188,9 @@ def words_ok(words):
         elif s1 == "command":
             if len(rest) < 2 or rest[1] not in UNITY_COMMAND_RO:
                 return "unity command: editor command outside the read-only set"
+            why = tail_ok(rest[2:], False)      # no --verbose here; the five names take no operands
+            if why:
+                return "unity command " + rest[1] + ": " + why
         return ""
 
     if base == "git":
@@ -161,7 +211,7 @@ def words_ok(words):
         if len(rest) != 1:
             return "source takes exactly one argument here"
         t = rest[0]
-        if t in SOURCE_OK or (t.startswith("/") and t.endswith("/.unity/env")):
+        if t in SOURCE_OK:
             return ""
         return "source target is not the unity env file: " + t
 
@@ -178,8 +228,14 @@ def words_ok(words):
 
     if base == "jq":
         for t in rest:
-            if t.startswith(JQ_BAD):
+            if not t.startswith("-") or t == "-" or t == "--":
+                continue                        # a filter or an operand, not an option
+            if t.startswith(JQ_BAD_LONG):
                 return "jq option that reads an arbitrary file: " + t
+            if not t.startswith("--"):           # short-option cluster: check every character
+                for ch in t[1:]:
+                    if ch in JQ_BAD_CHARS:
+                        return "jq short option that reads an arbitrary file: " + t
         return ""
 
     if base == "command":
