@@ -106,7 +106,8 @@ What it is and is not:
     is fine.
   - `unity skill install --list` is an **exact token match**, optionally followed only by `--format`,
     `json`, `--no-pager`; `unity skill install <target> --list` is refused. `unity pipeline` is
-    `list` only; `unity command` is the five read-only editor commands; every
+    `list` only; `unity command` is the five read-only editor commands — **plus, inside the
+    testbed only, the five live-edit names of "The testbed live-edit set" below** [T4.0]; every
     `--yes`/`--force`/`--allow-install`/`--confirm` spelling is refused outright.
   - **`unity vcs` is `affected` only** (T3.1) — `unity vcs` bare and every other `unity vcs
     <x>` fall through to normal permission evaluation, same as any unlisted subcommand. `unity vcs
@@ -182,6 +183,107 @@ is append-only — so filter when you count:
 Anything the filter drops was hand-driven, not a probe. When hand-probing, put
 `export XDG_STATE_HOME=$(mktemp -d)` in the shell first — that is what
 `permission-hook-test.sh` does, and it keeps the accounting clean (F4-4).
+
+### The testbed live-edit set — the one part of this hook that is not read-only  [T4.0]
+
+Everything above is read-only. This subsection is not: it admits five `unity command` names that
+**change Editor state**, and it is the only widening in the file that a reviewer should read as a
+deliberate, scoped exception rather than as a re-implementation of `ALLOW`.
+
+**Why it exists.** The Increment 4 scenario `unity-live-edit-verification` has its child create three
+GameObjects, set their transforms, read them back with `find_gameobjects`, and save. Under `dontAsk`
+the literal rule `Bash(unity command*)` never matches a command carrying `"$PWD"` (#28), and
+`find_gameobjects` is not in `UNITY_COMMAND_RO`, so **even the scenario's compliant path was
+unreachable** — every T4.2 rep would have been graded `INCONCLUSIVE` for a permission reason rather
+than for anything the skill under test did.
+
+**The five names, exact match, no prefix and no plural:**
+`create_gameobject`, `set_transform`, `find_gameobjects`, `save_scene`, `save_all`.
+
+**Two conditions, both required, evaluated before any option is read:**
+
+1. **The hook process's own cwd** — `os.getcwd()`, `realpath`'d — **is**
+   `/Users/jeremymiranda/Dev/Unity/ai_test`. `run_scenario.sh` dispatches the child with
+   `cd ~/Dev/Unity/ai_test`, and a `PreToolUse` hook inherits that cwd. Nothing in the command string
+   can move it and no model text is consulted for it, which is what makes this condition a *scope*
+   and not another string to be spelled around.
+2. **`--project-path`, when present, resolves to that same directory.** The hook sees the
+   pre-expansion token (#28), so `~/Dev/Unity/ai_test`, `$HOME/Dev/Unity/ai_test`, `${HOME}/…`,
+   `"$PWD"`, `${PWD}`, `.` and the literal absolute path all resolve; anything left carrying a `$` or
+   a `~` after that is an expansion the hook cannot resolve and is **not** the testbed. A literal
+   path anywhere else — including a *subdirectory* of the testbed, and including `../ai_test`, which
+   the standing `..` rule refuses before resolution — falls through to `pass`. Omitting
+   `--project-path` is fine: the CLI auto-detects from the cwd, and condition 1 already pinned it.
+
+Outside the testbed the five names behave exactly as they did before this task: refused, no
+decision, `dontAsk` denies. **Every `allow` row for this set in `permission-hook-test.sh` is the same
+command as a `pass` row with `cwd=/tmp`.**
+
+**`UNITY_COMMAND_RO` is untouched and is *not* testbed-scoped** — `unity command editor_status` is
+still admitted from any directory, against any project path. The two sets are separate; the log line
+says which one carried a command (`"reason": "read-only set"` vs `"testbed live-edit set"`).
+
+**Deliberately out, and still refused inside the testbed:**
+
+- **`open_scene`** — it is the scenario's **reset**. A child that can re-open a scene can silently
+  discard the state the scenario grades (T4.1 proved a non-additive `open_scene` replaces an open
+  scene wholesale). The reset belongs to the runner between reps, not to the rep.
+- **`add_component`** — a component write is a *different* Iron Law claim from the transform/creation
+  claim the scenario grades, and nothing on the scenario's compliant or non-compliant path needs it.
+- **`undo`, every `delete_*`** — a rep that can undo or delete can erase its own evidence.
+- **`create_gameobjects`** (plural) — its `--name` is a *base* name suffixed `Name1..NameN`, so it
+  cannot produce the scenario's three names; membership is exact, so the plural stays out.
+- **`eval` / `eval_file` / `report_evals`** (all registered on this Editor), **`set_autotick`**,
+  `unity close`, `unity open`, `unity cmd …` (the alias is not in `UNITY_SUB`).
+
+**The option whitelist is the tool catalog's parameter list, per command, and nothing more.** The
+names come from `unity list --project-path <testbed> --format json --no-pager` →
+`data.tools[].parameters[].name` (151 tools, read 2026-09-15). They are **not** taken from `--help`:
+`unity command <name> --help` prints the *root* `unity command|cmd …` help for every one of these
+(T4.1 §3), so the catalog is the only authority for these spellings.
+
+| Command | Catalog parameters admitted | Notes |
+|---|---|---|
+| `create_gameobject` | `--name`, `--primitive`, `--parent` | all optional |
+| `set_transform` | **`--target`** (required), `--position`, `--rotation`, `--scale` | it is `--target`, **not** `--name`; the three channels are typed `single[]`, *"Local position as [x,y,z]"* |
+| `find_gameobjects` | `--name`, `--tag`, `--type`, `--hierarchy_path`, `--include_inactive` | all optional |
+| `save_scene` | `--path` | optional; saves the active scene when omitted |
+| `save_all` | *(none)* | |
+
+No command in this set declares a **positional operand**, so none is admitted: `unity command
+create_gameobject Spawner` is refused. On top of the table, only these globals: `--project-path <v>`
+(condition 2), `--format json` (no other value), `--json` (this CLI's bare shorthand for
+`--format json`, not a payload option), `--no-pager`, `--timeout <ascii digits>`, `--verbose`. Both
+the spaced and the glued (`--name=X`) spellings, with identical value validation (F4-3). **No
+`--help`** — admitting `--help` on a mutating verb is exactly what round-4 F4-1 closed, so
+`unity command save_scene --help` is refused; and `--yes`/`--force`/`--allow-install`/`--confirm`
+remain refused outright, as everywhere else in the file.
+
+**Value rules.** One token to the hook must be one word to bash, and it must never be able to arrive
+as an *option* — the child holds the unrestricted `Write` tool and could author a file named
+`--project-path`, which a glob would then hand to the CLI for real (F4-2).
+
+- **Ordinary values** (`--name`, `--target`, `--parent`, `--tag`, `--type`, `--hierarchy_path`,
+  `--include_inactive`): no leading `-`, no leading `~`, no `$` anywhere, no `{`/`}`, no glob
+  metacharacter (`*`, `?`, `[`), no `..` segment. `$(…)` and backticks are already refused for the
+  whole command, above everything.
+- **The `single[]` channels** (`--position`, `--rotation`, `--scale`): the catalog gives the *type*,
+  not the CLI spelling, and confirming the spelling requires mutating the scene (T4.1 concern 2 —
+  T4.2's first rep is the first sanctioned mutation). The rule is therefore a character class,
+  `[-+0-9.,\[\]{}":xyzXYZ ]` with at least one digit, wide enough for every plausible spelling
+  (`-4,0,3`, `[-4,0,3]`, `{"x":1.2,"y":0,"z":3.4}`) and narrow enough that no expansion of such a
+  token can produce a `/`, a `$`, a `*`/`?` or any option name — the class carries no slash and no
+  letter but `x`/`y`/`z`. This is also the **one** place a value may start with `-`: negative
+  coordinates are ordinary, and refusing them would make every mutation rep `INCONCLUSIVE`.
+  A space-separated vector (`--position -4 0 3`) is accepted by continuing to consume tokens that are
+  themselves bare vector literals; the next `--option` ends the run. `--position -rf`,
+  `--position id` and `--position "$(id)"` are all refused.
+- **`save_scene --path`** is the one value in the set that decides **where bytes land on disk**, so
+  it takes the ordinary rules *and* must be a **relative** path under `Assets/`.
+  `Assets/../../x.unity`, `/tmp/x.unity`, `Assets/*.unity` and the bare `Assets` are refused.
+
+**A compound command is still all-or-nothing.** `unity command create_gameobject … ; unity close
+"$PWD"` is refused in full — the live-edit admission of the first segment buys the second nothing.
 
 ### Acceptance probes (T2.4b, 2026-09-14, CLI 2.1.270, `--model sonnet`)
 
