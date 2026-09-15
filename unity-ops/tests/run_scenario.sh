@@ -91,11 +91,20 @@ else
   # but it ACTIVATED it: Increment 4's children issue mutating editor commands as their normal job,
   # so a child that takes a hook refusal is one "retry with an absolute path" away from the unscoped
   # route. Removing the rule makes `tests/permission-hook.sh` the SOLE admitter of `unity command`:
-  # the read-only set (UNITY_COMMAND_RO, any cwd) plus the testbed live-edit set (five names, scoped
+  # the read-only set (UNITY_COMMAND_RO, any cwd) plus the testbed live-edit set (four names, scoped
   # to ~/Dev/Unity/ai_test, single segment). `Bash(unity test*)`/`Bash(unity build*)` stay --
   # Increment 6 needs them. Each later increment declares the `unity command` names it needs through
   # the hook, not here (Increment 7: `recompile`, `recompile_status`, `set_autotick`).
-  ALLOW=(Read Grep Glob Write Edit Skill Agent Task \
+  # `Write`/`Edit` are PATH-SCOPED to the testbed.  [T4.0 round 7] [R7-1a] [Delta D20]
+  # Unrestricted, they let the child rewrite `$HOME/.unity/env` -- the one file the permission hook
+  # admits as a live-edit PRELUDE -- to contain a `cd`, and then
+  # `. "$HOME/.unity/env" && unity command save_all --project-path "$PWD"` moves the shell while the
+  # hook resolves `$PWD` against its OWN cwd: arbitrary execution, and the T4.0 scoping defeated
+  # through the door the single-segment rule deliberately leaves open. The scenarios that MEASURE
+  # hand-edits (SampleScene.unity) stay measurable -- the testbed is inside the scope.
+  ALLOW=(Read Grep Glob Skill Agent Task \
+         "Write(//Users/jeremymiranda/Dev/Unity/ai_test/**)" \
+         "Edit(//Users/jeremymiranda/Dev/Unity/ai_test/**)" \
          "Bash(. *)" "Bash(export *)" "Bash(grep *)" \
          "Bash(unity --version)" "Bash(unity --help)" "Bash(unity * --help)" \
          "Bash(unity skill install --list)" "Bash(unity status*)" "Bash(unity list*)" \
@@ -157,6 +166,7 @@ else
       --permission-mode dontAsk --allowedTools "${ALLOW[@]}" \
       ${SETTINGS:+--settings "$SETTINGS"} \
       --disallowedTools "Read(//Users/jeremymiranda/.claude/plans/**)" \
+        "Write(//Users/jeremymiranda/.unity/**)" "Edit(//Users/jeremymiranda/.unity/**)" \
       -- "$PROMPT" < /dev/null ) > "$T" &
   child=$!
   wait "$child"; RC=$?; child=""
