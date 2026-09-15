@@ -289,14 +289,16 @@ recorded with no committed artefact. Two of its rows were reproduced from `~/Dev
 |---|---|---|---|---|---|
 | denied | `unity list --project-path "$PWD" …` | `Bash(unity list*)` | **1** | `7902d1cb-99f6-4341-b6d6-a548d24fd01f` | `../transcripts/permission-probe-pwd-denied.json` |
 | allowed | `unity list --project-path "$PWD" …` | `Bash` (unrestricted) | **0** | `869e4d07-5367-4177-9cbe-10b6fbc60397` | `../transcripts/permission-probe-pwd-allowed.json` |
-| **literal control** (T2.4b, review minor m1) | `unity list --project-path /Users/jeremymiranda/Dev/Unity/ai_test …` | `Bash(unity list*)` — the harness **default** rule, same as row 1 | **0** | `b46636ac-6e24-4d88-9179-647a4c7a93c2` | `../transcripts/permission-probe-literal-allowed.json` |
+| **literal control** (T2.4b, review minor m1) | `unity list --project-path /Users/jeremymiranda/Dev/Unity/ai_test …` | `Bash(unity list*)` — the harness **default** rule, same as row 1 | **0** | `136f7632-9787-4de6-99e2-ce2127cb7a57` | `../transcripts/permission-probe-literal-allowed.json` |
 
 **The third row is the reproduced discriminator.** Rows 1 and 3 differ in exactly one thing — `"$PWD"` versus the
 literal path it expands to — and run under the *same* rule, `Bash(unity list*)`. Row 1 is denied, row 3 ran (exit 6,
 `COMMAND_FAILED`, "No Pipeline instance found", the expected *command* result with the Editor closed). The original
 four-row table asserted this from a same-session observation; it is now a committed, separately dispatched probe, so
 the F1 classification below rests on evidence, not on recollection. Row 3 was captured 2026-09-14 under CLI 2.1.270,
-`--model sonnet`, and wrote no hook record (no `--plugin-dir`).
+`--model sonnet`, and wrote no hook record (no `--plugin-dir`). It was **re-captured** after the
+T2.4b round-1 review, together with the whole probe set, so that every committed transcript
+corresponds to the committed hook; the result was unchanged at **0** denials.
 
 **The literal `claude -p` invocation each committed probe ran under (review minor m2).** All three were dispatched
 from `~/Dev/Unity/ai_test` after `. "$HOME/.unity/env"`, with `--output-format json --verbose`, `--model sonnet`,
