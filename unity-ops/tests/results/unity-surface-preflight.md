@@ -663,7 +663,7 @@ leg 3 is now reachable, not a rate.
 | **Force-fed, widened envelope (graded)** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✗** |
 | Natural, default envelope (superseded, kept) | 1 | 1 | 2 | no | `unity-cli` (2nd) | ✓ / attempted→DENIED / ✗ |
 | **Natural, widened envelope (graded)** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✗** |
-| *(post-refactor, T2.5b)* **Force-fed, default envelope** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✓** |
+| *(post-refactor, T2.5b)* **Force-fed, default envelope (hook-backed)** | **1** | **1** | **0** | **no** | **none** | **✓ / ✓ / ✓** |
 
 **VERDICT: `UNEXPECTED`** — per the task's outcome table, *"Force-fed did not exercise all three legs → `UNEXPECTED`
 → Task 2.5."* **This verdict is T2.4's and is not amended here**: it graded the skill as it stood before T2.5, and
@@ -672,7 +672,10 @@ text; see "After T2.5" immediately below.
 
 **After T2.5.** One force-fed rep was run against the post-T2.5 skill (`## Post-refactor force-fed rep (T2.5b)`
 above, session `abacf766-a375-4f36-a9fe-3cb7e1fbf2e4`, model `claude-sonnet-5`, **default** envelope, `den` = 0).
-**Leg 3 fired.** The sandbox question was put to the human — `sandbox` occurs **1** time in that run's assistant
+**That `den` = 0 is the T2.4b permission hook admitting this rep's Bash calls, not the T2.5 skill rewrite** — the
+first default-envelope force-fed row in the Outcome table above (pre-hook) recorded `den` = 6 against the
+unrefactored skill, and this rep is the first scenario-level evidence the hook is active (see "Permission-hook
+evidence" in the T2.5b section above). **Leg 3 fired.** The sandbox question was put to the human — `sandbox` occurs **1** time in that run's assistant
 text, against **0** in T2.4's graded force-fed rep — and the run gave T2.5's own reason for asking despite the
 prompt pre-answering it: *"Your \"I've got it open right here\" was said before I ran these probes, so per the skill
 it doesn't count as the answer to the sandbox question — that has to come after."* It also declined to read
@@ -681,6 +684,14 @@ it doesn't count as the answer to the sandbox question — that has to come afte
 0 `serialized-asset-write` records, `GATE: PASS`). **The verdict this rep supports is `GREEN`.** It is **one rep**:
 an existence proof that leg 3 is reachable after the row-5 rewrite, **not** a majority and not a rate — no claim is
 made here about how often the post-T2.5 skill asks. The four T2.4 reps stand as recorded.
+
+`scenario-protocol.md:37` requires protocol `GREEN` to carry **both** halves — a force-fed run performing the gated
+behaviour **and** a natural run scoring `TRIGGERED: YES` — and T2.5b ran no natural rep, so the natural half here is
+inherited from T2.4's two pre-T2.5 natural reps. That carry-forward holds because the trigger surface is unchanged:
+`git diff 98317c7 HEAD -- unity-ops/skills/unity-surface-preflight/SKILL.md | grep -c '^[-+]\(name\|description\):'`
+→ **0** — SKILL.md's frontmatter `name` and `description` (what selects the skill on a natural prompt) are
+byte-identical from `98317c7` (T2.3) to HEAD, so T2.5's body-only edits could not have changed natural-trigger
+behavior and T2.4's `TRIGGERED: YES` reps still speak for it.
 
 Read precisely (T2.4):
 
@@ -793,17 +804,20 @@ disagreement).
 
 ## Step 4 verification
 
-Counts below were re-run **after** this round's edits, against the file as committed. **They include this
-verification block itself** — see the correction note under the table.
+**Scope: T2.4/T2.4b.** Counts below were re-run **after** this round's edits, against the file as committed. **They
+include this verification block itself** — see the correction note under the table. T2.5b then appended the
+`## Post-refactor force-fed rep (T2.5b)` section and a new `## Outcome` row below this block without re-running
+these greps, going stale exactly as the "self-counting" property documented below predicts. Recounted after that
+append — see "Re-measured after T2.5b's append" under the table for the delta.
 
 ```
 $ F=unity-ops/tests/results/unity-surface-preflight.md
 $ grep -c '^## Force-fed run\|^## Natural-trigger run' "$F"   -> 2
 $ grep -c '^VERDICT_RED: __$\|^TRIGGERED: __$' "$F"          -> 0
-$ grep -c '^TRIGGERED: YES$' "$F"                          -> 4
-$ grep -ci 'pipeline list' "$F"                            -> 26
-$ grep -ci 'sandbox' "$F"                                  -> 22
-$ grep -ci 'list --project-path' "$F"                      -> 31   # 25 before T2.4b's m1/m2 additions
+$ grep -c '^TRIGGERED: YES$' "$F"                          -> 5
+$ grep -ci 'pipeline list' "$F"                            -> 31
+$ grep -ci 'sandbox' "$F"                                  -> 29
+$ grep -ci 'list --project-path' "$F"                      -> 36   # 31 before T2.5b's append
 $ bash /tmp/unity-ops-check-testbed.sh; echo rc=$?
 ADDED (status lines absent from snapshot): 0
 REMOVED (snapshot status lines now gone): 0
@@ -819,6 +833,15 @@ rc=0
 **Re-measured after T2.4b's m1/m2 additions (2026-09-14).** The `list --project-path` count moved 25 → 31 because
 the committed-evidence block above gained the literal-control row and the three reconstructed invocations; the other
 five counts are unchanged. Same self-counting property as the correction below: this file contains its own queries.
+
+**Re-measured after T2.5b's append (2026-09-14, review round 1).** T2.5b added the `## Post-refactor force-fed rep
+(T2.5b)` section (one graded four-line block, its own gate-legs table, dispatch, hook-log and verdict prose) plus one
+new row in `## Outcome`, all below this block, and did not re-run these greps — the same staleness this block warns
+about, reintroduced by appending. Recounted against the file as committed: `^TRIGGERED: YES$` moved 4 → **5**
+(T2.5b's rep contributes one graded block); `pipeline list` moved 26 → **31**; `sandbox` moved 22 → **29**; `list
+--project-path` moved 31 → **36**. All four deltas are T2.5b's new prose (the dispatch line, the gate-legs table, the
+verbatim reasoning quotes, the "After T2.5" paragraph) — none is a correction to the T2.4/T2.4b-era numbers, and the
+table above this note now prints the current, recounted values.
 
 **Correction — the first submission's recorded counts do not reproduce (M3).** They were written as `19 / 17 / 19`
 for the three keyword greps. Measured against the file as committed they were **20 / 18 / 20**; the independent
@@ -843,11 +866,16 @@ two legs did pass, but the greps are not what established it.
 
 **The leg check is the `✓ / ✓ / ✗` column of the Outcome table above**, graded from each run's assistant text:
 
-| Leg | This file's `grep -ci` | What the grep proves | Actual leg result (graded from the transcript) |
+**Scope: T2.4's graded force-fed rep (pre-T2.5), the same run the `✓ / ✓ / ✗` cell above records.** The
+post-refactor rep in `## Post-refactor force-fed rep (T2.5b)` above is a *different* run, graded separately, where
+leg 3 fired (`✓ / ✓ / ✓` — see that section's gate-legs table and the `## Outcome` row below it); do not read the ✗
+below against that later section.
+
+| Leg | This file's `grep -ci` | What the grep proves | Actual leg result (T2.4's graded force-fed rep, graded from the transcript) |
 |---|---|---|---|
 | 1 — `pipeline list` read via `data.summary` | ≥ 1 | only that this file mentions it | **✓** — the run quoted `instancesInSafeMode: 0` |
 | 2 — `unity list --project-path` (row 3b probe) | ≥ 1 | only that this file mentions it | **✓** — command 5 run, output quoted back |
-| 3 — sandbox question put to the human | ≥ 1 | only that this file mentions it | **✗** — `sandbox` occurs **0** times in the graded force-fed run's assistant text |
+| 3 — sandbox question put to the human | ≥ 1 | only that this file mentions it | **✗** — `sandbox` occurs **0** times in T2.4's graded force-fed run's assistant text (T2.4's rep, pre-T2.5; T2.5b's post-refactor rep above scores **✓**, `sandbox` occurring 1 time) |
 
 **Reconciled.** The Step-4 greps confirm that this file *documents* all three legs. The Outcome table records that
 leg 3 was **not exercised**. Both are true and they are not in conflict once the grep is read as a
