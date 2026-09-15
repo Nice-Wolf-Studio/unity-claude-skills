@@ -31,8 +31,9 @@ This is the whole technique. Two lines, no guessing, and a result you can quote:
 $ unity test --help | grep -i affected
 $ echo "exit=$?"
 exit=1        # no match -> the flag is not on this binary. THIS is how you establish absence.
-              # and the sentence you hand back, version first, because the probe was of one build:
-              #   "on 1.0.0-beta.8, unity test has no --affected."
+              # and the sentence you hand back, version first, because the probe was of one build
+              # (fill N with the version YOU recorded in rule 1 — never a number copied from here):
+              #   "on 1.0.0-beta.N, unity test has no --affected."
 ```
 
 `exit=1` from an anchored grep over the binary's own help is evidence. A reference page that happens not to
@@ -43,11 +44,11 @@ is not an answer either: it tells the user something true of a build they cannot
 
 The probe above licenses exactly one sentence: *`unity test` has no `--affected` on this binary.* It does
 not license *"there is no changed-file test selection here"*. Those are different claims about different
-scopes, and on beta.8 the second one is false:
+scopes, and the second is often false — the capability lives on a verb the named command does not own:
 
 ```
 $ unity vcs --help              # read the Commands: list — hunt the capability, not the flag
-$ unity vcs affected --help     # beta.8 answers here; its options block carries the compare-against flag
+$ unity vcs affected --help     # the owning verb answers here; read its options block for the compare-against flag
 ```
 
 Those two commands are the work. This page deliberately does not paste what they print: an answer copied
@@ -71,7 +72,7 @@ $ unity skill install --list | grep -ic 'claude-code.*not installed'
 **A `0` from that count is only half an answer.** It is what "installed" looks like — and equally what a
 failed command, a vanished row and a changed output shape look like. So settle the row's existence before
 you read the count: the first command must exit 0 **and** print a `claude-code` row. `unity skill install
---list --format json` is the cleaner form of the same check on beta.8, returning a `success` envelope whose
+--list --format json` is the cleaner form of the same check, returning a `success` envelope whose
 per-client entries you can read instead of inferring from a count; either way, no row seen means no
 dependency established, which is a stop and not a pass.
 
